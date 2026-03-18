@@ -329,3 +329,110 @@ class CampusEnvironment:
     def get_and_clear_self_schedule_changes(self) -> List[Dict[str, Any]]:
         """Get calendar changes and clear the log"""
         return self.calendar_system.get_and_clear_self_schedule_changes()
+
+    # =========================================================================
+    # Raw (unwrapped) tool methods — return str, raise ValueError on error.
+    # Used by the JAZ integration (stulife_env.py) so agents receive plain
+    # strings instead of ToolResult objects.
+    # =========================================================================
+
+    # Calendar
+    def raw_add_event(self, calendar_id: str, event_title: str, location: str, time: str, description: Optional[str] = None) -> str:
+        return self.calendar_system.add_event(calendar_id, event_title, location, time, description)
+
+    def raw_remove_event(self, calendar_id: str, event_id: str) -> str:
+        return self.calendar_system.remove_event(calendar_id, event_id)
+
+    def raw_update_event(self, calendar_id: str, event_id: str, new_details: Dict[str, Any]) -> str:
+        return self.calendar_system.update_event(calendar_id, event_id, new_details)
+
+    def raw_view_schedule(self, calendar_id: str, date: str) -> str:
+        return self.calendar_system.view_schedule(calendar_id, date)
+
+    def raw_query_advisor_availability(self, advisor_id: str, date: str) -> str:
+        return self.calendar_system.query_advisor_availability(advisor_id, date)
+
+    # Map lookup
+    def raw_find_building_id(self, building_name: str) -> str:
+        return self.map_lookup_system.find_building_id(building_name)
+
+    def raw_get_building_details(self, building_id: str) -> str:
+        return self.map_lookup_system.get_building_details(building_id)
+
+    def raw_find_room_location(self, room_query: str, building_id: Optional[str] = None, zone: Optional[str] = None) -> str:
+        return self.map_lookup_system.find_room_location(room_query, building_id, zone)
+
+    def raw_find_optimal_path(self, source_building_id: str, target_building_id: str, constraints: Optional[Dict[str, Any]] = None) -> str:
+        result = self.map_lookup_system.find_optimal_path(source_building_id, target_building_id, constraints)
+        return f"Optimal path found: {' -> '.join(result['path_names'])}."
+
+    def raw_query_buildings_by_property(self, zone: Optional[str] = None, building_type: Optional[str] = None, amenity: Optional[str] = None) -> str:
+        return self.map_lookup_system.query_buildings_by_property(zone, building_type, amenity)
+
+    def raw_get_building_complex_info(self, building_id: str) -> str:
+        return self.map_lookup_system.get_building_complex_info(building_id)
+
+    def raw_list_valid_query_properties(self) -> str:
+        return self.map_lookup_system.list_valid_query_properties()
+
+    # Geography
+    def raw_walk_to(self, path_info: Dict[str, Any]) -> str:
+        return self.geography_system.walk_to(path_info)
+
+    def raw_get_current_location(self) -> str:
+        return self.geography_system.get_current_location()
+
+    # Reservation
+    def raw_query_availability(self, location_id: str, date: str) -> str:
+        return self.reservation_system.query_availability(location_id, date)
+
+    def raw_make_booking(self, location_id: str, item_name: str, date: str, time_slot: str, seat_id: Optional[str] = None) -> str:
+        return self.reservation_system.make_booking(location_id, item_name, date, time_slot, seat_id)
+
+    # Information / bibliography
+    def raw_list_chapters(self, book_title: str) -> str:
+        return self.information_system.list_chapters(book_title)
+
+    def raw_list_sections(self, book_title: str, chapter_title: str) -> str:
+        return self.information_system.list_sections(book_title, chapter_title)
+
+    def raw_list_articles(self, book_title: str, chapter_title: str, section_title: str) -> str:
+        return self.information_system.list_articles(book_title, chapter_title, section_title)
+
+    def raw_view_article(self, identifier: str, by: str) -> str:
+        return self.information_system.view_article(identifier, by)
+
+    def raw_list_by_category(self, category: str, entity_type: str, level: Optional[str] = None) -> str:
+        return self.information_system.list_by_category(category, entity_type, level)
+
+    def raw_query_by_identifier(self, identifier: str, by: str, entity_type: str) -> str:
+        return self.information_system.query_by_identifier(identifier, by, entity_type)
+
+    def raw_list_books_by_category(self, category: str) -> str:
+        return self.information_system.list_books_by_category(category)
+
+    def raw_search_books(self, query: str, search_type: str = "title") -> str:
+        return self.information_system.search_books(query, search_type)
+
+    # Course selection / draft / registration
+    def raw_browse_courses(self, filters: Optional[Dict[str, Any]] = None) -> str:
+        return self.course_selection_system.browse_courses(filters)
+
+    def raw_add_course(self, section_id: str) -> str:
+        return self.course_selection_system.add_course(section_id)
+
+    def raw_remove_course(self, section_id: str) -> str:
+        return self.course_selection_system.remove_course(section_id)
+
+    def raw_assign_pass(self, section_id: str, pass_type: str) -> str:
+        return self.course_selection_system.assign_pass(section_id, pass_type)
+
+    def raw_view_draft(self) -> str:
+        return self.course_selection_system.view_draft()
+
+    def raw_submit_draft(self) -> str:
+        return self.course_selection_system.submit_draft()
+
+    # Email
+    def raw_send_email(self, recipient: str, subject: str, body: str) -> str:
+        return self.email_system.send_email(recipient, subject, body)
