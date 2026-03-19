@@ -935,44 +935,48 @@ class CampusTask(Task[CampusDatasetItem]):
         # Record failed prerequisite task if current task failed and has pre_task_for
         self._record_failed_prerequisite_task(session, current_item)
     
-    def _evaluate_email_sending(self, session: Session, task_item: CampusDatasetItem) -> None:
-        """Evaluate email sending task"""
+    def _check_email_sending(self, task_item: CampusDatasetItem) -> tuple[Optional[bool], str]:
+        """Core email-sending evaluation; returns (True/False/None, reason)."""
         try:
             # Get latest sent email
             latest_email = self.campus_environment.email_system.get_latest_email_for_evaluation()
-            
+
             if not latest_email:
-                session.evaluation_record.outcome = SessionEvaluationOutcome.INCORRECT
-            else:
-                # Compare with ground truth
-                gt = task_item.ground_truth
-                
-                # Unescape ground truth body for accurate comparison
-                expected_body = gt.get("body", "") if gt.get("body") else ""
-                if isinstance(expected_body, str):
-                    try:
-                        # Only attempt unescape if the string contains backslashes (potential escape sequences)
-                        if '\\' in expected_body:
-                            expected_body = expected_body.encode('latin1').decode('unicode_escape')
-                    except (UnicodeDecodeError, UnicodeEncodeError):
-                        # If unescape fails, use the original string
-                        pass
+                return False, "no email sent"
+            # Compare with ground truth
+            gt = task_item.ground_truth
+            # Unescape ground truth body for accurate comparison
+            expected_body = gt.get("body", "") if gt.get("body") else ""
+            if isinstance(expected_body, str):
+                try:
+                    # Only attempt unescape if the string contains backslashes (potential escape sequences)
+                    if '\\' in expected_body:
+                        expected_body = expected_body.encode('latin1').decode('unicode_escape')
+                except (UnicodeDecodeError, UnicodeEncodeError):
+                    # If unescape fails, use the original string
+                    pass
+            # Normalize both bodies for a lenient, robust comparison
+            normalized_expected_body = self._normalize_text_for_comparison(expected_body)
+            normalized_actual_body = self._normalize_text_for_comparison(latest_email.body)
+            # Use 'in' (contains) for a consistent, lenient check across all email tasks
+            if latest_email.recipient != gt.get("recipient"):
+                return False, f"recipient mismatch: got {latest_email.recipient!r}, expected {gt.get('recipient')!r}"
+            if latest_email.subject != gt.get("subject"):
+                return False, f"subject mismatch: got {latest_email.subject!r}, expected {gt.get('subject')!r}"
+            if normalized_expected_body not in normalized_actual_body:
+                return False, "body does not contain expected content"
+            return True, "email matches"
+        except Exception as e:
+            return None, f"evaluation error: {e}"
 
-                # Normalize both bodies for a lenient, robust comparison
-                normalized_expected_body = self._normalize_text_for_comparison(expected_body)
-                normalized_actual_body = self._normalize_text_for_comparison(latest_email.body)
-
-                # Use 'in' (contains) for a consistent, lenient check across all email tasks
-                if (latest_email.recipient == gt.get("recipient") and
-                    latest_email.subject == gt.get("subject") and
-                    normalized_expected_body in normalized_actual_body):
-                    session.evaluation_record.outcome = SessionEvaluationOutcome.CORRECT
-                else:
-                    session.evaluation_record.outcome = SessionEvaluationOutcome.INCORRECT
-                    
-        except Exception:
-            session.evaluation_record.outcome = SessionEvaluationOutcome.UNKNOWN
-            
+    def _evaluate_email_sending(self, session: Session, task_item: CampusDatasetItem) -> None:
+        """Evaluate email sending task"""
+        result, _ = self._check_email_sending(task_item)
+        session.evaluation_record.outcome = (
+            SessionEvaluationOutcome.CORRECT if result is True else
+            SessionEvaluationOutcome.INCORRECT if result is False else
+            SessionEvaluationOutcome.UNKNOWN
+        )
         # Enhance evaluation record with debug information
         self._enhance_evaluation_record(session, task_item)
     
@@ -1022,175 +1026,163 @@ class CampusTask(Task[CampusDatasetItem]):
         except Exception as e:
             print(f"Failed to save course selection details for task {task_item.task_id}: {e}")
 
-    def _evaluate_course_selection(self, session: Session, task_item: CampusDatasetItem) -> None:
-        """Evaluate course selection task"""
-        self._save_course_selection_details(session, task_item)
+    def _check_course_selection(self, task_item: CampusDatasetItem) -> tuple[Optional[bool], str]:
+        """Core course-selection evaluation; returns (True/False/None, reason)."""
         try:
             # Get current draft schedule
             draft_schedule = self.campus_environment.course_selection_system.get_draft_schedule_for_evaluation()
             expected_outcome = task_item.ground_truth.get("expected_schedule_outcome", {})
             expected_sections = expected_outcome.get("selected_sections", [])
-            
+
             # Compare draft schedule with expected outcome
             if len(draft_schedule.selected_sections) != len(expected_sections):
-                session.evaluation_record.outcome = SessionEvaluationOutcome.INCORRECT
-            else:
-                # Check each course and pass assignment
-                all_found = True
-                for expected in expected_sections:
-                    found = False
-                    for actual in draft_schedule.selected_sections:
-                        if (actual.course_code == expected["course_code"] and
-                            actual.assigned_pass == expected["assigned_pass"]):
-                            found = True
-                            break
-                    if not found:
-                        all_found = False
-                        break
-                
-                session.evaluation_record.outcome = SessionEvaluationOutcome.CORRECT if all_found else SessionEvaluationOutcome.INCORRECT
-            
-        except Exception:
-            session.evaluation_record.outcome = SessionEvaluationOutcome.UNKNOWN
-            
+                return False, f"wrong number of courses: got {len(draft_schedule.selected_sections)}, expected {len(expected_sections)}"
+            # Check each course and pass assignment
+            for expected in expected_sections:
+                actual = next(
+                    (s for s in draft_schedule.selected_sections if s.course_code == expected["course_code"]),
+                    None,
+                )
+                if actual is None:
+                    return False, f"course {expected['course_code']!r} not found in draft"
+                if actual.assigned_pass is None:
+                    return False, f"course {expected['course_code']!r} found but no pass assigned (expected {expected['assigned_pass']!r})"
+                if actual.assigned_pass != expected["assigned_pass"]:
+                    return False, f"course {expected['course_code']!r} found but wrong pass: got {actual.assigned_pass!r}, expected {expected['assigned_pass']!r}"
+            return True, "all expected courses in draft"
+        except Exception as e:
+            return None, f"evaluation error: {e}"
+
+    def _evaluate_course_selection(self, session: Session, task_item: CampusDatasetItem) -> None:
+        """Evaluate course selection task"""
+        self._save_course_selection_details(session, task_item)
+        result, _ = self._check_course_selection(task_item)
+        session.evaluation_record.outcome = (
+            SessionEvaluationOutcome.CORRECT if result is True else
+            SessionEvaluationOutcome.INCORRECT if result is False else
+            SessionEvaluationOutcome.UNKNOWN
+        )
         # Enhance evaluation record with debug information
         self._enhance_evaluation_record(session, task_item)
     
-    def _evaluate_walking_simple(self, session: Session, task_item: CampusDatasetItem) -> None:
-        """Evaluate simple walking task by strictly checking the path taken."""
+    def _check_walking_simple(self, task_item: CampusDatasetItem) -> tuple[Optional[bool], str]:
+        """Core walking evaluation; returns (True/False/None, reason)."""
         try:
             # Get geography state for evaluation
             geo_state = self.campus_environment.geography_system.get_state_for_evaluation()
-            
+
             # Get expected path from ground truth
             expected_path = task_item.ground_truth.get("path_taken")
 
             # If there's no expected path in ground_truth, fallback to original simple check
             if not expected_path:
-                expected_outcome = task_item.ground_truth.get("expected_outcome", {})
-                target_location = expected_outcome.get("target_location_id")
-                if target_location and geo_state.current_location_id == target_location:
-                    session.evaluation_record.outcome = SessionEvaluationOutcome.CORRECT
-                else:
-                    session.evaluation_record.outcome = SessionEvaluationOutcome.INCORRECT
-            else:
-                # Construct the full path taken by the agent from walk_history
-                agent_path = []
-                if geo_state.walk_history:
-                    # Start with the first segment
-                    agent_path.extend(geo_state.walk_history[0])
-                    # Append subsequent segments, avoiding overlapping points
-                    for segment in geo_state.walk_history[1:]:
-                        if agent_path and segment and agent_path[-1] == segment[0]:
-                            agent_path.extend(segment[1:])
-                        else:
-                            # Handle cases of disjointed paths if necessary, for now, just append
-                            agent_path.extend(segment)
-                
-                # Check if the agent's path exactly matches the expected path
-                if agent_path == expected_path:
-                    session.evaluation_record.outcome = SessionEvaluationOutcome.CORRECT
-                else:
-                    session.evaluation_record.outcome = SessionEvaluationOutcome.INCORRECT
-                    # Initialize detail_dict if it doesn't exist for additional debugging info
-                    if session.evaluation_record.detail_dict is None:
-                        session.evaluation_record.detail_dict = {}
-                    session.evaluation_record.detail_dict.update({
-                        "error_reason": "Path taken does not match expected path.",
-                        "expected_path": expected_path,
-                        "agent_path": agent_path
-                    })
-                
+                target_location = task_item.ground_truth["expected_outcome"]["target_location_id"]
+                current = geo_state.current_location_id
+                if current == target_location:
+                    return True, f"at correct location {current!r}"
+                return False, f"at {current!r}, expected {target_location!r}"
+            # Construct the full path taken by the agent from walk_history
+            agent_path: list = []
+            if geo_state.walk_history:
+                # Start with the first segment
+                agent_path.extend(geo_state.walk_history[0])
+                # Append subsequent segments, avoiding overlapping points
+                for segment in geo_state.walk_history[1:]:
+                    if agent_path and segment and agent_path[-1] == segment[0]:
+                        agent_path.extend(segment[1:])
+                    else:
+                        # Handle cases of disjointed paths if necessary, for now, just append
+                        agent_path.extend(segment)
+            # Check if the agent's path exactly matches the expected path
+            if agent_path == expected_path:
+                return True, "correct path taken"
+            return False, f"path mismatch: got {agent_path}, expected {expected_path}"
         except Exception as e:
-            session.evaluation_record.outcome = SessionEvaluationOutcome.UNKNOWN
-            if session.evaluation_record.detail_dict is None:
-                session.evaluation_record.detail_dict = {}
-            session.evaluation_record.detail_dict["error"] = str(e)
-            
+            return None, f"evaluation error: {e}"
+
+    def _evaluate_walking_simple(self, session: Session, task_item: CampusDatasetItem) -> None:
+        """Evaluate simple walking task by strictly checking the path taken."""
+        result, _ = self._check_walking_simple(task_item)
+        session.evaluation_record.outcome = (
+            SessionEvaluationOutcome.CORRECT if result is True else
+            SessionEvaluationOutcome.INCORRECT if result is False else
+            SessionEvaluationOutcome.UNKNOWN
+        )
         # Enhance evaluation record with debug information
         self._enhance_evaluation_record(session, task_item)
     
-    def _evaluate_calendar_management(self, session: Session, task_item: CampusDatasetItem) -> None:
-        """Evaluate calendar management task"""
+    def _check_calendar_management(self, task_item: CampusDatasetItem) -> tuple[Optional[bool], str]:
+        """Core calendar-management evaluation; returns (True/False/None, reason)."""
         try:
             # Get calendar events for the specified calendar
             calendar_id = task_item.details.get("calendar_id", "self")
             events = self.campus_environment.calendar_system.get_calendar_events_for_evaluation(calendar_id)
-            
+
             # Check if expected event was created
             expected_details = task_item.details
-            event_found = False
             for event in events:
                 time_match = self._is_date_match(expected_details.get("time"), event.time)
                 if (event.event_title == expected_details.get("event_title") and
-                    event.location == expected_details.get("location") and
-                    time_match):
-                    event_found = True
-                    break
-            
-            session.evaluation_record.outcome = SessionEvaluationOutcome.CORRECT if event_found else SessionEvaluationOutcome.INCORRECT
-            
-        except Exception:
-            session.evaluation_record.outcome = SessionEvaluationOutcome.UNKNOWN
-            
+                        event.location == expected_details.get("location") and
+                        time_match):
+                    return True, "calendar event found"
+            return False, (
+                f"no event matching title={expected_details.get('event_title')!r}, "
+                f"location={expected_details.get('location')!r}, "
+                f"time={expected_details.get('time')!r}"
+            )
+        except Exception as e:
+            return None, f"evaluation error: {e}"
+
+    def _evaluate_calendar_management(self, session: Session, task_item: CampusDatasetItem) -> None:
+        """Evaluate calendar management task"""
+        result, _ = self._check_calendar_management(task_item)
+        session.evaluation_record.outcome = (
+            SessionEvaluationOutcome.CORRECT if result is True else
+            SessionEvaluationOutcome.INCORRECT if result is False else
+            SessionEvaluationOutcome.UNKNOWN
+        )
         # Enhance evaluation record with debug information
         self._enhance_evaluation_record(session, task_item)
     
-    def _evaluate_reservation(self, session: Session, task_item: CampusDatasetItem) -> None:
-        """Evaluate reservation task"""
+    def _check_reservation(self, task_item: CampusDatasetItem) -> tuple[Optional[bool], str]:
+        """Core reservation evaluation; returns (True/False/None, reason)."""
         try:
             # Get reservations made by this task
             reservations = self.campus_environment.reservation_system.get_reservations_for_evaluation(task_item.task_id)
-            
+
             if not reservations:
-                session.evaluation_record.outcome = SessionEvaluationOutcome.INCORRECT
-            else:
-                # Handle both flat and nested ground truth structures
-                expected_outcomes = []
-                if "expected_reservation_outcome" in task_item.ground_truth:
-                    expected_outcomes = task_item.ground_truth["expected_reservation_outcome"]
-                elif isinstance(task_item.ground_truth, dict) and "location_id" in task_item.ground_truth:
-                    # Handle flat structure by wrapping it in a list
-                    expected_outcomes = [task_item.ground_truth]
+                return False, "no reservation made"
+            expected_outcomes = task_item.ground_truth["expected_reservation_outcome"]
+            for reservation in reservations:
+                for expected in expected_outcomes:
+                    # Stricter validation using AND logic with comprehensive field checks
+                    # Using getattr for reservation object and .get for expected dict for safety
+                    seat_id_match = ("seat_id" not in expected or
+                                     getattr(reservation, 'seat_id', None) == expected.get("seat_id"))
+                    item_name_match = ("item_name" not in expected or
+                                       ((expected.get("item_name") or "") in (getattr(reservation, 'item_name', "") or "")))
+                    location_id_match = ("location_id" not in expected or
+                                         getattr(reservation, 'location_id', None) == expected.get("location_id"))
+                    time_slot_match = ("time_slot" not in expected or
+                                       getattr(reservation, 'time_slot', None) == expected.get("time_slot"))
+                    date_match = ("date" not in expected or
+                                  getattr(reservation, 'date', None) == expected.get("date"))
+                    if seat_id_match and item_name_match and location_id_match and time_slot_match and date_match:
+                        # A reservation matches all specified criteria in an expected outcome
+                        return True, "reservation found"
+            return False, f"no reservation matching criteria: {expected_outcomes}"
+        except Exception as e:
+            return None, f"evaluation error: {e}"
 
-                if not expected_outcomes:
-                    session.evaluation_record.outcome = SessionEvaluationOutcome.INCORRECT
-                    self._enhance_evaluation_record(session, task_item)
-                    return
-
-                reservation_matched = False
-                for reservation in reservations:
-                    for expected in expected_outcomes:
-                        # Stricter validation using AND logic with comprehensive field checks
-                        # Using getattr for reservation object and .get for expected dict for safety
-                        seat_id_match = ("seat_id" not in expected or
-                                       getattr(reservation, 'seat_id', None) == expected.get("seat_id"))
-
-                        item_name_match = ("item_name" not in expected or
-                                         ((expected.get("item_name") or "") in (getattr(reservation, 'item_name', "") or "")))
-                        
-                        location_id_match = ("location_id" not in expected or
-                                           getattr(reservation, 'location_id', None) == expected.get("location_id"))
-
-                        time_slot_match = ("time_slot" not in expected or
-                                         getattr(reservation, 'time_slot', None) == expected.get("time_slot"))
-
-                        date_match = ("date" not in expected or
-                                    getattr(reservation, 'date', None) == expected.get("date"))
-
-                        if seat_id_match and item_name_match and location_id_match and time_slot_match and date_match:
-                            # A reservation matches all specified criteria in an expected outcome
-                            reservation_matched = True
-                            break
-                    if reservation_matched:
-                        break
-                
-                session.evaluation_record.outcome = SessionEvaluationOutcome.CORRECT if reservation_matched else SessionEvaluationOutcome.INCORRECT
-            
-        except Exception:
-            session.evaluation_record.outcome = SessionEvaluationOutcome.UNKNOWN
-            
-        # Enhance evaluation record with debug information
+    def _evaluate_reservation(self, session: Session, task_item: CampusDatasetItem) -> None:
+        """Evaluate reservation task"""
+        result, _ = self._check_reservation(task_item)
+        session.evaluation_record.outcome = (
+            SessionEvaluationOutcome.CORRECT if result is True else
+            SessionEvaluationOutcome.INCORRECT if result is False else
+            SessionEvaluationOutcome.UNKNOWN
+        )
         self._enhance_evaluation_record(session, task_item)
 
     def _evaluate_quiz_question(self, session: Session, task_item: CampusDatasetItem) -> None:
@@ -1221,20 +1213,17 @@ class CampusTask(Task[CampusDatasetItem]):
         # Enhance evaluation record with debug information
         self._enhance_evaluation_record(session, task_item)
 
-    def _evaluate_multi_system(self, session: Session, task_item: CampusDatasetItem) -> None:
+    def _check_multi_system(self, task_item: CampusDatasetItem) -> tuple[Optional[bool], str]:
         """
-        Evaluate multi-system tasks that involve multiple campus systems
-        Uses AND logic: ALL components must be correct for CORRECT outcome
+        Core multi-system evaluation; returns (True/False/None, reason).
+        Uses AND logic: ALL components must be correct for a True result.
         """
         try:
             ground_truth = task_item.ground_truth
             if not isinstance(ground_truth, dict):
-                session.evaluation_record.outcome = SessionEvaluationOutcome.UNKNOWN
-                return
-
+                return None, "ground truth is not a dict"
             # Group criteria by system type based on key prefixes
-            grouped_criteria = collections.defaultdict(list)
-            
+            grouped_criteria: dict = collections.defaultdict(list)
             # Map ground truth keys (aliases and prefixes) to a canonical system type
             PREFIX_MAP = {
                 "email_sent": "email",
@@ -1250,75 +1239,68 @@ class CampusTask(Task[CampusDatasetItem]):
                 "walk_to": "walk_to",
                 "walk": "walk_to",
             }
-
-            # Sort prefixes by length (desc) to match the most specific prefix first 
+            # Sort prefixes by length (desc) to match the most specific prefix first
             # (e.g., "reservation_made" before "reservation")
             sorted_prefixes = sorted(PREFIX_MAP.keys(), key=len, reverse=True)
-
             for key, criteria in ground_truth.items():
-                system_type = None
                 for prefix in sorted_prefixes:
                     if key.startswith(prefix):
-                        system_type = PREFIX_MAP[prefix]
+                        if isinstance(criteria, list):
+                            grouped_criteria[PREFIX_MAP[prefix]].extend(criteria)
+                        else:
+                            grouped_criteria[PREFIX_MAP[prefix]].append(criteria)
                         break
-                
-                if system_type:
-                    if isinstance(criteria, list):
-                        grouped_criteria[system_type].extend(criteria)
-                    else:
-                        grouped_criteria[system_type].append(criteria)
-
-            all_components_correct = True
-
             # Evaluate each system component that has criteria
             if "email" in grouped_criteria:
-                if not self._evaluate_email_component(grouped_criteria["email"]):
-                    all_components_correct = False
-
+                ok, reason = self._evaluate_email_component(grouped_criteria["email"])
+                if not ok:
+                    return False, f"email: {reason}"
             if "reservation" in grouped_criteria:
-                if not self._evaluate_reservation_component(grouped_criteria["reservation"], task_item.task_id):
-                    all_components_correct = False
-
+                ok, reason = self._evaluate_reservation_component(grouped_criteria["reservation"], task_item.task_id)
+                if not ok:
+                    return False, f"reservation: {reason}"
             if "calendar" in grouped_criteria:
-                if not self._evaluate_calendar_component(grouped_criteria["calendar"]):
-                    all_components_correct = False
-
+                ok, reason = self._evaluate_calendar_component(grouped_criteria["calendar"])
+                if not ok:
+                    return False, f"calendar: {reason}"
             if "geography" in grouped_criteria:
-                if not self._evaluate_geography_component(grouped_criteria["geography"]):
-                    all_components_correct = False
-
+                ok, reason = self._evaluate_geography_component(grouped_criteria["geography"])
+                if not ok:
+                    return False, f"geography: {reason}"
             if "walk_to" in grouped_criteria:
-                if not self._evaluate_walk_to_component(grouped_criteria["walk_to"]):
-                    all_components_correct = False
-
+                ok, reason = self._evaluate_walk_to_component(grouped_criteria["walk_to"])
+                if not ok:
+                    return False, f"walk_to: {reason}"
             if "course_selection" in grouped_criteria:
-                if not self._evaluate_course_component(session, task_item, grouped_criteria["course_selection"]):
-                    all_components_correct = False
-
+                ok, reason = self._check_course_component(grouped_criteria["course_selection"])
+                if not ok:
+                    return False, f"course_selection: {reason}"
             # Validate execution sequence for multi-system tasks
-            sequence_valid = True
-
             if task_item.require_sequence:
-                sequence_valid, sequence_message = self._validate_execution_sequence(ground_truth, session)
+                sequence_valid, sequence_message = self._check_execution_sequence(ground_truth)
                 if not sequence_valid:
                     print(f"Sequence validation failed: {sequence_message}")
-                else:
-                    print(f"Sequence validation passed: {sequence_message}")
-
-            # Set final outcome based on AND logic (components + sequence)
-            if all_components_correct and sequence_valid:
-                session.evaluation_record.outcome = SessionEvaluationOutcome.CORRECT
-            else:
-                session.evaluation_record.outcome = SessionEvaluationOutcome.INCORRECT
-                
+                    return False, f"sequence invalid: {sequence_message}"
+                print(f"Sequence validation passed: {sequence_message}")
+            return True, "all components satisfied"
         except Exception as e:
             print(f"Error in multi-system evaluation: {e}")
-            session.evaluation_record.outcome = SessionEvaluationOutcome.UNKNOWN
-            
-        # Enhance evaluation record with debug information
+            return None, f"evaluation error: {e}"
+
+    def _evaluate_multi_system(self, session: Session, task_item: CampusDatasetItem) -> None:
+        """
+        Evaluate multi-system tasks that involve multiple campus systems.
+        Uses AND logic: ALL components must be correct for CORRECT outcome.
+        """
+        result, _ = self._check_multi_system(task_item)
+        session.evaluation_record.outcome = (
+            SessionEvaluationOutcome.CORRECT if result is True else
+            SessionEvaluationOutcome.INCORRECT if result is False else
+            SessionEvaluationOutcome.UNKNOWN
+        )
         self._enhance_evaluation_record(session, task_item)
 
-    def _evaluate_email_component(self, email_criteria_list: List[dict]) -> bool:
+    def _evaluate_email_component(self, email_criteria_list: List[dict]) -> tuple[bool, str]:
         """
         Evaluate email component for multi-system tasks.
         Checks if for every criterion in the list, a unique matching sent email is found.
@@ -1334,12 +1316,12 @@ class CampusTask(Task[CampusDatasetItem]):
                      latest_email = self.campus_environment.email_system.get_latest_email_for_evaluation()
                      if latest_email:
                          return self._email_matches_criteria(latest_email, email_criteria_list[0])
-                 return False
+                 return False, "email system does not support fetching all emails"
 
             sent_emails = self.campus_environment.email_system.get_all_emails_for_evaluation()
-            
+
             if len(sent_emails) < len(email_criteria_list):
-                return False
+                return False, f"not enough emails sent: got {len(sent_emails)}, expected {len(email_criteria_list)}"
 
             matched_emails = [False] * len(sent_emails)
 
@@ -1349,20 +1331,21 @@ class CampusTask(Task[CampusDatasetItem]):
                     if matched_emails[i]:
                         continue  # This email has already been matched
 
-                    if self._email_matches_criteria(email, criteria):
+                    ok, reason = self._email_matches_criteria(email, criteria)
+                    if ok:
                         matched_emails[i] = True
                         found_match_for_criteria = True
                         break
-                
+
                 if not found_match_for_criteria:
-                    return False  # No unique match found for this criterion
+                    return False, f"no matching email for criterion recipient={criteria.get('recipient') or criteria.get('recipient_contains')!r}: {reason}"
 
-            return True  # All criteria were satisfied by unique emails
+            return True, "all emails match"  # All criteria were satisfied by unique emails
 
-        except Exception:
-            return False
+        except Exception as e:
+            return False, f"evaluation error: {e}"
 
-    def _email_matches_criteria(self, email: Any, criteria: dict) -> bool:
+    def _email_matches_criteria(self, email: Any, criteria: dict) -> tuple[bool, str]:
         """Helper to check if a single email object matches given criteria."""
         # Handle SentEmail object (use dot notation) and fallback for dict-like structure
         email_to = getattr(email, 'to', getattr(email, 'recipient', email.get("to", "") if hasattr(email, 'get') else ""))
@@ -1371,19 +1354,19 @@ class CampusTask(Task[CampusDatasetItem]):
 
         # Check recipient
         if "recipient" in criteria and email_to != criteria["recipient"]:
-            return False
+            return False, f"recipient mismatch: got {email_to!r}, expected {criteria['recipient']!r}"
         if "recipient_contains" in criteria and criteria["recipient_contains"].lower() not in email_to.lower():
-            return False
+            return False, f"recipient {email_to!r} does not contain {criteria['recipient_contains']!r}"
 
         # Check subject
         if "subject_contains" in criteria and criteria["subject_contains"].lower() not in email_subject.lower():
-            return False
+            return False, f"subject {email_subject!r} does not contain {criteria['subject_contains']!r}"
 
         # Check body
         if "body_contains" in criteria:
             # Ground truth body from JSON
             expected_body = criteria["body_contains"]
-            
+
             # IMPROVED: Safe unescape handling - only process if it contains escape sequences
             if isinstance(expected_body, str):
                 try:
@@ -1393,17 +1376,17 @@ class CampusTask(Task[CampusDatasetItem]):
                 except (UnicodeDecodeError, UnicodeEncodeError):
                     # If unescape fails, use the original string
                     pass
-            
+
             # Use the robust normalization for a lenient 'contains' comparison
             normalized_expected = self._normalize_text_for_comparison(expected_body)
             normalized_actual = self._normalize_text_for_comparison(email_body)
 
             if normalized_expected not in normalized_actual:
-                return False
-            
-        return True
+                return False, "body does not contain expected content"
 
-    def _evaluate_reservation_component(self, reservation_criteria_list: List[dict], task_id: str) -> bool:
+        return True, "email matches"
+
+    def _evaluate_reservation_component(self, reservation_criteria_list: List[dict], task_id: str) -> tuple[bool, str]:
         """
         Evaluate reservation component for multi-system tasks.
         Checks if for every criterion in the list, a unique matching reservation is found.
@@ -1411,7 +1394,7 @@ class CampusTask(Task[CampusDatasetItem]):
         try:
             reservations = self.campus_environment.reservation_system.get_reservations_for_evaluation(task_id)
             if len(reservations) < len(reservation_criteria_list):
-                return False
+                return False, f"not enough reservations made: got {len(reservations)}, expected {len(reservation_criteria_list)}"
 
             matched_reservations = [False] * len(reservations)
 
@@ -1427,12 +1410,12 @@ class CampusTask(Task[CampusDatasetItem]):
                         break
 
                 if not found_match_for_criteria:
-                    return False
-            
-            return True
+                    return False, f"no matching reservation found for criterion: item={criteria.get('item_name')!r} location={criteria.get('location_id')!r} date={criteria.get('date')!r} time_slot={criteria.get('time_slot')!r}"
 
-        except Exception:
-            return False
+            return True, "all reservations match"
+
+        except Exception as e:
+            return False, f"evaluation error: {e}"
 
     def _reservation_matches_criteria(self, reservation: Any, criteria: dict) -> bool:
         """Helper to check if a single reservation object matches given criteria."""
@@ -1449,7 +1432,7 @@ class CampusTask(Task[CampusDatasetItem]):
 
         return seat_id_match and item_name_match and location_id_match and time_slot_match and date_match
 
-    def _evaluate_calendar_component(self, calendar_criteria_list: List[dict]) -> bool:
+    def _evaluate_calendar_component(self, calendar_criteria_list: List[dict]) -> tuple[bool, str]:
         """
         Evaluate calendar component for multi-system tasks.
         Checks if for every criterion in the list, a unique matching calendar event is found.
@@ -1459,9 +1442,9 @@ class CampusTask(Task[CampusDatasetItem]):
             # Fetch calendar_id from the first criterion if specified.
             calendar_id = calendar_criteria_list[0].get("calendar_id", "self") if calendar_criteria_list else "self"
             events = self.campus_environment.calendar_system.get_calendar_events_for_evaluation(calendar_id)
-            
+
             if len(events) < len(calendar_criteria_list):
-                return False
+                return False, f"not enough calendar events: got {len(events)}, expected {len(calendar_criteria_list)}"
 
             matched_events = [False] * len(events)
 
@@ -1470,19 +1453,19 @@ class CampusTask(Task[CampusDatasetItem]):
                 for i, event in enumerate(events):
                     if matched_events[i]:
                         continue
-                    
+
                     if self._calendar_event_matches_criteria(event, criteria):
                         matched_events[i] = True
                         found_match_for_criteria = True
                         break
-                
-                if not found_match_for_criteria:
-                    return False
-            
-            return True
 
-        except Exception:
-            return False
+                if not found_match_for_criteria:
+                    return False, f"no matching calendar event found for criterion: title={criteria.get('event_title_contains') or criteria.get('title_contains')!r} time={criteria.get('time') or criteria.get('date')!r} location={criteria.get('location')!r}"
+
+            return True, "all calendar events match"
+
+        except Exception as e:
+            return False, f"evaluation error: {e}"
 
     def _calendar_event_matches_criteria(self, event: Any, criteria: dict) -> bool:
         """Helper to check if a single calendar event matches given criteria."""
@@ -1530,7 +1513,7 @@ class CampusTask(Task[CampusDatasetItem]):
             matches = False
         return matches
 
-    def _evaluate_geography_component(self, geography_criteria_list: List[dict]) -> bool:
+    def _evaluate_geography_component(self, geography_criteria_list: List[dict]) -> tuple[bool, str]:
         """
         Evaluate geography component for multi-system tasks.
         Checks if the final geography state satisfies ALL criteria in the list.
@@ -1543,31 +1526,28 @@ class CampusTask(Task[CampusDatasetItem]):
                 if "current_location" in criteria:
                     current_loc = geo_state.get("current_location") if isinstance(geo_state, dict) else getattr(geo_state, 'current_location_id', None)
                     if current_loc != criteria["current_location"]:
-                        return False
+                        return False, f"wrong location: at {current_loc!r}, expected {criteria['current_location']!r}"
                 # Check visited locations if specified
                 if "visited_locations" in criteria:
                     visited = geo_state.get("visited_locations", []) if isinstance(geo_state, dict) else getattr(geo_state, 'visited_locations', [])
                     required = criteria["visited_locations"]
-                    if not all(loc in visited for loc in required):
-                        return False
-            
-            return True
+                    missing = [loc for loc in required if loc not in visited]
+                    if missing:
+                        return False, f"locations not visited: {missing}"
 
-        except Exception:
-            return False
+            return True, "geography matches"
 
-    def _evaluate_course_component(self, session: Session, task_item: CampusDatasetItem, course_criteria_list: List[dict]) -> bool:
-        """
-        Evaluate course selection component for multi-system tasks.
-        Checks if for every criterion in the list, a unique matching course selection is found.
-        """
-        self._save_course_selection_details(session, task_item)
+        except Exception as e:
+            return False, f"evaluation error: {e}"
+
+    def _check_course_component(self, course_criteria_list: List[dict]) -> tuple[bool, str]:
+        """Core course-component evaluation; returns (True/False, reason)."""
         try:
             draft_schedule = self.campus_environment.course_selection_system.get_draft_schedule_for_evaluation()
             selected_sections = draft_schedule.selected_sections
 
             if len(selected_sections) < len(course_criteria_list):
-                return False
+                return False, f"not enough courses in draft: got {len(selected_sections)}, expected {len(course_criteria_list)}"
 
             matched_sections = [False] * len(selected_sections)
 
@@ -1576,27 +1556,35 @@ class CampusTask(Task[CampusDatasetItem]):
                 for i, section in enumerate(selected_sections):
                     if matched_sections[i]:
                         continue
-                    
+
                     # Check course code
                     if "course_code" in criteria and section.course_code == criteria["course_code"]:
                         # Check pass assignment if specified
                         if "assigned_pass" in criteria and section.assigned_pass != criteria["assigned_pass"]:
-                            continue # Pass assignment doesn't match, this is not the right section
-                        
+                            continue  # Pass assignment doesn't match, this is not the right section
+
                         # Match found
                         matched_sections[i] = True
                         found_match_for_criteria = True
                         break
-                
+
                 if not found_match_for_criteria:
-                    return False
-            
-            return True
+                    return False, f"course {criteria.get('course_code')!r} with pass {criteria.get('assigned_pass')!r} not found in draft"
 
-        except Exception:
-            return False
+            return True, "all courses match"
 
-    def _evaluate_walk_to_component(self, walk_to_criteria_list: List[dict]) -> bool:
+        except Exception as e:
+            return False, f"evaluation error: {e}"
+
+    def _evaluate_course_component(self, session: Session, task_item: CampusDatasetItem, course_criteria_list: List[dict]) -> tuple[bool, str]:
+        """
+        Evaluate course selection component for multi-system tasks.
+        Checks if for every criterion in the list, a unique matching course selection is found.
+        """
+        self._save_course_selection_details(session, task_item)
+        return self._check_course_component(course_criteria_list)
+
+    def _evaluate_walk_to_component(self, walk_to_criteria_list: List[dict]) -> tuple[bool, str]:
         """
         Evaluate walk_to component for multi-system tasks.
         Checks if the final location matches the target_location_id.
@@ -1608,12 +1596,12 @@ class CampusTask(Task[CampusDatasetItem]):
             for criteria in walk_to_criteria_list:
                 if "target_location_id" in criteria:
                     if current_location != criteria["target_location_id"]:
-                        return False
-            
-            return True
+                        return False, f"at {current_location!r}, expected {criteria['target_location_id']!r}"
 
-        except Exception:
-            return False
+            return True, "at correct location"
+
+        except Exception as e:
+            return False, f"evaluation error: {e}"
 
     def _release(self) -> None:
         """Release resources"""
@@ -1977,50 +1965,25 @@ class CampusTask(Task[CampusDatasetItem]):
         else:
             return "unknown"
 
-    def _validate_execution_sequence(self, ground_truth: Dict[str, Any], session: Session) -> tuple[bool, str]:
-        """
-        Validate that actions were executed in the correct sequence based on ground_truth order
-        
-        Args:
-            ground_truth: Ground truth dictionary with expected components
-            session: The current session for debug logging
-        
-        Returns:
-            Tuple of (is_valid, error_message)
-        """
-        # Initialize debug logging within the session record
-        if session.evaluation_record.detail_dict is None:
-            session.evaluation_record.detail_dict = {}
-        if "sequence_validation_debug" not in session.evaluation_record.detail_dict:
-            session.evaluation_record.detail_dict["sequence_validation_debug"] = {}
-        debug_info = session.evaluation_record.detail_dict["sequence_validation_debug"]
-
+    def _check_execution_sequence(self, ground_truth: Dict[str, Any]) -> tuple[bool, str]:
+        """Core sequence validation; returns (is_valid, message) without session debug logging."""
         # Extract expected sequence from ground_truth keys order
-        expected_sequence = []
         system_mapping = {
             "email_sent": "email", "email": "email",
             "reservation_made": "reservation", "reservation": "reservation",
             "calendar_event": "calendar", "calendar": "calendar",
             "location_reached": "geography", "location": "geography",
             "course_selected": "course_selection", "course": "course_selection",
-            "walk_to": "geography", "walk": "geography"
+            "walk_to": "geography", "walk": "geography",
         }
-        
         # Sort prefixes by length (desc) to match the most specific prefix first
         sorted_prefixes = sorted(system_mapping.keys(), key=len, reverse=True)
-
+        expected_sequence = []
         for key in ground_truth.keys():
-            system_type = None
             for prefix in sorted_prefixes:
                 if key.startswith(prefix):
-                    system_type = system_mapping[prefix]
+                    expected_sequence.append(system_mapping[prefix])
                     break
-            
-            if system_type:
-                expected_sequence.append(system_type)
-
-        debug_info["expected_sequence"] = expected_sequence
-
         if len(expected_sequence) <= 1:
             # No sequence validation needed for single or no components
             return True, "No sequence validation required"
@@ -2036,27 +1999,31 @@ class CampusTask(Task[CampusDatasetItem]):
                 action_content = action.get("action_content", "")
                 # Extract action name, e.g., 'send_email' from 'email.send_email(...)'
                 match = re.search(r'\.(\w+)\(', action_content)
-                if match:
-                    action_name = match.group(1)
-                    if action_name in key_actions:
-                        actual_key_actions_sequence.append(action["system_type"])
-
-        debug_info["raw_action_history_systems"] = [a.get("system_type") for a in self.action_history]
-        debug_info["actual_sequence_extracted"] = actual_key_actions_sequence
+                if match and match.group(1) in key_actions:
+                    actual_key_actions_sequence.append(action["system_type"])
 
         # Validate sequence order: Must be an exact match
         if actual_key_actions_sequence != expected_sequence:
             expected_str = ' → '.join(expected_sequence)
             actual_str = ' → '.join(actual_key_actions_sequence)
             error_message = f"Wrong execution sequence. Expected: [{expected_str}], but got: [{actual_str}]"
-            
+
             # Provide more detailed error for debugging
             if len(actual_key_actions_sequence) != len(expected_sequence):
                 error_message += f" (Length mismatch: expected {len(expected_sequence)}, got {len(actual_key_actions_sequence)})"
-            
+
             return False, error_message
 
         return True, f"Execution sequence is correct: {' → '.join(actual_key_actions_sequence)}"
+
+    def _validate_execution_sequence(self, ground_truth: Dict[str, Any], session: Session) -> tuple[bool, str]:
+        """Validate execution sequence, logging debug info to session record."""
+        if session.evaluation_record.detail_dict is None:
+            session.evaluation_record.detail_dict = {}
+        debug_info = session.evaluation_record.detail_dict.setdefault("sequence_validation_debug", {})
+        debug_info["raw_action_history_systems"] = [a.get("system_type") for a in self.action_history]
+        is_valid, message = self._check_execution_sequence(ground_truth)
+        return is_valid, message
     
     def _enhance_evaluation_record(self, session: Session, task_item: CampusDatasetItem) -> None:
         """
