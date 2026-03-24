@@ -404,16 +404,31 @@ class CampusEnvironment:
         return self.calendar_system.query_advisor_availability(advisor_id, date)
 
     # Map lookup
-    def raw_find_building_id(self, building_name: str) -> str:
+    def raw_find_building_id(self, building_name: str) -> Dict[str, str]:
         """Find a building's unique ID by its name or alias.
 
         Args:
             building_name: Name or alias of the building (e.g. "Grand Central Library").
 
         Returns:
-            Human-readable result string.
+            Dict with "name" and "id" keys.
         """
-        return self.map_lookup_system.find_building_id(building_name)
+        # DIFF from original: returns Dict instead of str.
+        # Original: returned ``"Found building 'X' with ID 'B001'."``
+        # Issue: the agent needs the ID to pass to find_optimal_path, walk_to, etc.
+        # but had to parse it from a human-readable string.
+        # Fix: return {"name": ..., "id": ...} so the agent can do
+        # ``bid = campus.find_building_id("...")["id"]``.
+
+        # TODO: Perhaps map_lookup_system.find_building_id should return a dict directly?
+        result_str = self.map_lookup_system.find_building_id(building_name)
+        # Parse "Found building 'X' with ID 'Y'." into structured data
+        import re
+        m = re.search(r"Found building '(.+?)' with ID '(.+?)'", result_str)
+        if m:
+            return {"name": m.group(1), "id": m.group(2)}
+        # Fallback: raise so the error propagates
+        raise ValueError(result_str)
 
     def raw_get_building_details(self, building_id: str) -> str:
         """Get all details for a building (name, zone, type, amenities, rooms).
@@ -439,23 +454,46 @@ class CampusEnvironment:
         """
         return self.map_lookup_system.find_room_location(room_query, building_id, zone)
 
-    def raw_find_optimal_path(self, source_building_id: str, target_building_id: str, constraints: Optional[Dict[str, Any]] = None) -> str:
+    def raw_find_optimal_path(self, source_building_id: str, target_building_id: str, constraints: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Find the best path between two buildings.
 
-        Returns a human-readable string listing building names along the path.
-        To actually move, call walk_to with path_info={"path": [<list of building IDs>]}.
+        Returns a dict that can be passed directly to walk_to(), e.g.::
+
+            path = campus.find_optimal_path("B010", "B127")
+            campus.walk_to(path)
+
         Use find_building_id to resolve building names to IDs if needed.
 
         Args:
             source_building_id: Starting building ID.
             target_building_id: Destination building ID.
-            constraints: Optional dict of routing constraints (e.g. {"avoid": "crowds"}).
+            constraints: Optional dict of path property preferences. Keys must match
+                edge property names and values must match exactly (edges that don't
+                match get a cost penalty, so the path prefers matching edges but may
+                still use non-matching ones if no alternative exists). Valid keys and
+                their possible values:
+                - "path_type": "Indoor" | "Outdoor"
+                - "rain_exposure": "Covered" | "Exposed" | "Exposed_Puddles" | "Exposed_Slippery"
+                - "illumination": "Good" | "Poor"
+                - "accessibility": "Wheelchair" | "Standard" | "Stairs_Only" | "Steep_Grade" | "Uneven_Surface" | "No_Bicycle"
+                - "congestion": "Low" | "Normal" | "High_During_Class_Change" | "High_After_Classes"
+                Example: {"path_type": "Indoor", "rain_exposure": "Covered", "illumination": "Good"}
 
         Returns:
-            Human-readable result string.
+            Dict with "path" (list of building IDs) and "path_names" (list of building names).
+            Pass this directly to walk_to().
         """
-        result = self.map_lookup_system.find_optimal_path(source_building_id, target_building_id, constraints)
-        return f"Optimal path found: {' -> '.join(result['path_names'])}."
+        # DIFF from original: returns Dict instead of str.
+        # Original: returned a human-readable string
+        # ``f"Optimal path found: {' -> '.join(result['path_names'])}."``
+        # which discarded the structured path data (building IDs).
+        # Issue: the agent needs the building ID list to pass to walk_to(), but had
+        # to parse it from a human-readable string, often getting it wrong (e.g.
+        # passing just waypoint IDs instead of the full path with intermediates).
+        # Fix: return the raw dict so the agent can do
+        # ``path = campus.find_optimal_path(...); campus.walk_to(path)``.
+
+        return self.map_lookup_system.find_optimal_path(source_building_id, target_building_id, constraints)
 
     def raw_query_buildings_by_property(self, zone: Optional[str] = None, building_type: Optional[str] = None, amenity: Optional[str] = None) -> str:
         """Query buildings based on properties. At least one filter is required.
@@ -490,28 +528,43 @@ class CampusEnvironment:
         return self.map_lookup_system.list_valid_query_properties()
 
     # Geography
-    def raw_walk_to(self, path_info: Dict[str, Any]) -> str:
+    def raw_walk_to(self, path_info: Dict[str, Any]) -> Dict[str, str]:
         """Move to a location by following a path of building IDs.
 
-        Typical usage: call find_optimal_path to see the route, then pass the
-        building IDs as path_info={"path": ["B083", "B014", "B001"]}.
+        Typical usage: call find_optimal_path to get the route, then pass it::
+
+            path = campus.find_optimal_path("B083", "B001")
+            campus.walk_to(path)
 
         Args:
             path_info: Dict with a "path" key containing an ordered list of building IDs
                 from current location to destination (at least 2 entries).
 
         Returns:
-            Human-readable result string.
+            Dict with "name" and "id" of the new location.
         """
-        return self.geography_system.walk_to(path_info)
+        # DIFF from original: returns Dict instead of str.
+        # Original: returned ``"Successfully walked to X. You are now at X."``
+        # Issue: agent needs the new location ID for subsequent operations.
+        # Fix: return {"name": ..., "id": ...} of the new location.
 
-    def raw_get_current_location(self) -> str:
+        self.geography_system.walk_to(path_info)
+        state = self.geography_system._state
+        return {"name": state.current_location_name, "id": state.current_location_id}
+
+    def raw_get_current_location(self) -> Dict[str, str]:
         """Get your current building location.
 
         Returns:
-            Human-readable result string.
+            Dict with "name" and "id" keys.
         """
-        return self.geography_system.get_current_location()
+        # DIFF from original: returns Dict instead of str.
+        # Original: returned ``"You are currently at X (ID: B001)."``
+        # Issue: the agent needs the ID to pass to find_optimal_path, etc.
+        # Fix: return {"name": ..., "id": ...}.
+
+        state = self.geography_system._state
+        return {"name": state.current_location_name, "id": state.current_location_id}
 
     # Reservation
     def raw_query_availability(self, location_id: str, date: str) -> str:
@@ -731,13 +784,24 @@ class CampusEnvironment:
         """
         return self.course_selection_system.assign_pass(section_id, pass_type)
 
-    def raw_view_draft(self) -> str:
+    def raw_view_draft(self) -> list[Dict[str, str]]:
         """View your current draft schedule.
 
         Returns:
-            Human-readable result string.
+            List of dicts, each with "course_code" and "assigned_pass" keys.
+            Empty list if no courses in draft.
         """
-        return self.course_selection_system.view_draft()
+        # DIFF from original: returns list of dicts instead of str.
+        # Original: returned a formatted string like ``"Your draft: ..."``
+        # Issue: agent needs course codes and pass types to decide what to change,
+        # but had to parse them from a multi-line formatted string.
+        # Fix: return list of {"course_code": ..., "assigned_pass": ...} dicts.
+
+        draft = self.course_selection_system.get_draft_schedule_for_evaluation()
+        return [
+            {"course_code": s.course_code, "assigned_pass": s.assigned_pass or ""}
+            for s in draft.selected_sections
+        ]
 
     def raw_submit_draft(self) -> str:
         """Submit your draft schedule for final registration.
