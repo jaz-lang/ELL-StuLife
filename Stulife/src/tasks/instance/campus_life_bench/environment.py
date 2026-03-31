@@ -298,7 +298,22 @@ class CampusEnvironment:
 
     def browse_courses(self, filters: Optional[Dict[str, Any]] = None) -> ToolResult:
         """Browse available courses with optional filters"""
-        return self._wrap(self.course_selection_system.browse_courses, filters)
+        try:
+            courses = self.course_selection_system.browse_courses(filters)
+            message = f"Found {len(courses)} course(s):"
+            for c in courses:
+                sched = c.get("schedule", {})
+                days = ", ".join(sched.get("days", []))
+                message += f"\n- {c['section_id']}: {c['course_name']}"
+                message += f" (Credits: {c.get('credits', 'N/A')}, Popularity: {c.get('popularity', 'N/A')})"
+                message += f"\n  Instructor: {c.get('instructor', 'N/A')}"
+                message += f"\n  Schedule: {days}, {sched.get('time', 'N/A')}"
+                message += f"\n  Location: {sched.get('location', 'N/A')}"
+            return ToolResult.success(message, data={"courses": courses})
+        except ValueError as e:
+            return ToolResult.failure(str(e))
+        except Exception as e:
+            return ToolResult.error(str(e))
 
     def add_course(self, section_id: str) -> ToolResult:
         """Add a course to draft schedule"""
@@ -746,7 +761,8 @@ class CampusEnvironment:
                 - "credits": filter expression (e.g. "<=3").
 
         Returns:
-            Human-readable result string.
+            List of dicts, each with keys: "section_id", "course_name",
+            "credits", "type", "instructor", "popularity", "schedule".
         """
         return self.course_selection_system.browse_courses(filters)
 

@@ -136,7 +136,7 @@ class CourseSelectionSystem:
         if semester in ["Semester 1", "Semester 2"]:
             self._current_semester = semester
 
-    def browse_courses(self, filters: Optional[Dict[str, Any]] = None) -> str:
+    def browse_courses(self, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
         Browse available courses with optional filters
 
@@ -144,7 +144,7 @@ class CourseSelectionSystem:
             filters: Optional filters to apply
 
         Returns:
-            Human-readable course listing
+            List of course dicts
 
         Raises:
             ValueError: If no courses match the criteria
@@ -186,34 +186,26 @@ class CourseSelectionSystem:
             # Get current state
             state = self._course_states.get(course_code, CourseState(50, 50))
 
-            # Create enriched course info
-            enriched_course = course.copy()
-            enriched_course["popularity_index"] = state.popularity_index
-
-            courses.append(enriched_course)
+            schedule = course.get("schedule", {})
+            instructor = course.get("instructor", {})
+            courses.append({
+                "section_id": course_code,
+                "course_name": course["course_name"],
+                "credits": course.get("credits"),
+                "type": course.get("type"),
+                "instructor": instructor.get("name"),
+                "popularity": state.popularity_index,
+                "schedule": {
+                    "days": schedule.get("days", []),
+                    "time": schedule.get("time"),
+                    "location": schedule.get("location", {}).get("building_name"),
+                },
+            })
 
         if not courses:
             raise ValueError("No courses found matching the specified criteria.")
 
-        # Format course list for display
-        message = f"Found {len(courses)} course(s):"
-        for course in courses:
-            schedule_info = course.get("schedule", {})
-            weeks = schedule_info.get("weeks", {})
-            location = schedule_info.get("location", {})
-            instructor = course.get("instructor", {})
-            days = ", ".join(schedule_info.get("days", []))
-
-            message += f"\n- {course['course_code']}: {course['course_name']}"
-            message += f" (Credits: {course.get('credits', 'N/A')}, Popularity: {course.get('popularity_index', 'N/A')})"
-            message += f"\n  Instructor: {instructor.get('name', 'N/A')}"
-            prerequisites = ", ".join(course.get('prerequisites', [])) or "None"
-            message += f"\n  Prerequisites: {prerequisites}"
-            message += f"\n  Schedule: Weeks {weeks.get('start', '?')}-{weeks.get('end', '?')}, {days}, {schedule_info.get('time', 'N/A')}"
-            message += f"\n  Location: {location.get('building_name', 'N/A')}, {location.get('room', location.get('room_number', 'N/A'))}"
-
-        # TODO: also return structured {"courses": courses}? (originally part of ToolResult.data)
-        return ensure_english_message(message)
+        return courses
 
     def add_course(self, section_id: str) -> str:
         """
