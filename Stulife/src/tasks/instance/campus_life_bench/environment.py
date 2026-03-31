@@ -802,18 +802,18 @@ class CampusEnvironment:
         """View your current draft schedule.
 
         Returns:
-            List of dicts, each with "course_code" and "assigned_pass" keys.
+            List of dicts, each with "section_id" and "assigned_pass" keys.
             Empty list if no courses in draft.
         """
         # DIFF from original: returns list of dicts instead of str.
         # Original: returned a formatted string like ``"Your draft: ..."``
         # Issue: agent needs course codes and pass types to decide what to change,
         # but had to parse them from a multi-line formatted string.
-        # Fix: return list of {"course_code": ..., "assigned_pass": ...} dicts.
+        # Fix: return list of {"section_id": ..., "assigned_pass": ...} dicts.
 
         draft = self.course_selection_system.get_draft_schedule_for_evaluation()
         return [
-            {"course_code": s.course_code, "assigned_pass": s.assigned_pass or ""}
+            {"section_id": s.course_code, "assigned_pass": s.assigned_pass}
             for s in draft.selected_sections
         ]
 
