@@ -12,9 +12,8 @@ dependencies = [
     "colorama>=0.4",
 ]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["src*"]
+[tool.setuptools]
+package-dir = {"stulife" = "src"}
 
 [tool.black]
 line-length = 88
