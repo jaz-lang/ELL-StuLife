@@ -207,7 +207,12 @@ class CampusEnvironment:
 
     def find_building_id(self, building_name: str) -> ToolResult:
         """Find building ID by name or alias"""
-        return self._wrap(self.map_lookup_system.find_building_id, building_name)
+        try:
+            result = self.map_lookup_system.find_building_id(building_name)
+            message = f"Found building '{result['name']}' with ID '{result['id']}'."
+            return ToolResult.success(message, result)
+        except ValueError as e:
+            return ToolResult.failure(str(e))
 
     def get_building_details(self, building_id: str) -> ToolResult:
         """Get detailed information about a building"""
@@ -428,22 +433,9 @@ class CampusEnvironment:
         Returns:
             Dict with "name" and "id" keys.
         """
-        # DIFF from original: returns Dict instead of str.
-        # Original: returned ``"Found building 'X' with ID 'B001'."``
-        # Issue: the agent needs the ID to pass to find_optimal_path, walk_to, etc.
-        # but had to parse it from a human-readable string.
-        # Fix: return {"name": ..., "id": ...} so the agent can do
-        # ``bid = campus.find_building_id("...")["id"]``.
-
-        # TODO: Perhaps map_lookup_system.find_building_id should return a dict directly?
-        result_str = self.map_lookup_system.find_building_id(building_name)
-        # Parse "Found building 'X' with ID 'Y'." into structured data
-        import re
-        m = re.search(r"Found building '(.+?)' with ID '(.+?)'", result_str)
-        if m:
-            return {"name": m.group(1), "id": m.group(2)}
-        # Fallback: raise so the error propagates
-        raise ValueError(result_str)
+        # DIFF from original: returns Dict instead of str so the agent can do
+        # ``bid = campus.find_building_id("...")["id"]`` without parsing.
+        return self.map_lookup_system.find_building_id(building_name)
 
     def raw_get_building_details(self, building_id: str) -> str:
         """Get all details for a building (name, zone, type, amenities, rooms).

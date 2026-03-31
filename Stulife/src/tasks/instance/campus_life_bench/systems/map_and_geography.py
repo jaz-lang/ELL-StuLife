@@ -81,7 +81,7 @@ class MapLookupSystem:
                 return node
         raise ValueError(f"Building with ID '{building_id}' not found.")
 
-    def find_building_id(self, building_name: str) -> str:
+    def find_building_id(self, building_name: str) -> Dict[str, str]:
         """
         Find building ID by name or alias
 
@@ -89,7 +89,7 @@ class MapLookupSystem:
             building_name: Building name or alias to search for
 
         Returns:
-            Human-readable message with building ID
+            Dict with "name" and "id" keys.
 
         Raises:
             ValueError: If building name is missing or not found
@@ -97,23 +97,23 @@ class MapLookupSystem:
         if not building_name:
             raise ValueError("Building name is required.")
 
-        building_name_lower = building_name.lower()
+        # Try both with and without "The " prefix — task descriptions sometimes
+        # use a grammatical lowercase "the" that doesn't match canonical names
+        # like "The Capitol Forum", or vice versa.
+        candidates = [building_name.lower()]
+        if building_name.lower().startswith("the "):
+            candidates.append(building_name[4:].lower())
+        else:
+            candidates.append(("the " + building_name).lower())
 
         for node in self._map_data["nodes"]:
-            # Check exact name match
-            if node["name"].lower() == building_name_lower:
-                message = f"Found building '{node['name']}' with ID '{node['id']}'."
-                # TODO: also return structured {"building_id": node["id"], "building_name": node["name"]}?
-                # (originally part of ToolResult.data)
-                return ensure_english_message(message)
+            node_name_lower = node["name"].lower()
+            if node_name_lower in candidates:
+                return {"name": node["name"], "id": node["id"]}
 
-            # Check aliases
             for alias in node.get("aliases", []):
-                if alias.lower() == building_name_lower:
-                    message = f"Found building '{node['name']}' with ID '{node['id']}' (matched alias '{alias}')."
-                    # TODO: also return structured {"building_id": node["id"], "building_name": node["name"]}?
-                    # (originally part of ToolResult.data)
-                    return ensure_english_message(message)
+                if alias.lower() in candidates:
+                    return {"name": node["name"], "id": node["id"]}
 
         raise ValueError(f"Building '{building_name}' not found.")
 
