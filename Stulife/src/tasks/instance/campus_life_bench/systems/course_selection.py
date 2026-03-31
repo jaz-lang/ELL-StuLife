@@ -228,10 +228,19 @@ class CourseSelectionSystem:
         if not course_exists:
             raise ValueError(f"Course '{section_id}' does not exist.")
 
-        # Check if already in draft
+        # Check if already in draft (exact match)
         for entry in self._draft_schedule.selected_sections:
             if entry.course_code == section_id:
                 raise ValueError(f"Course '{section_id}' is already in your draft schedule.")
+
+        # Check if a different section of the same course is already in draft
+        base_code = section_id.split("(")[0]
+        for entry in self._draft_schedule.selected_sections:
+            if entry.course_code.split("(")[0] == base_code:
+                raise ValueError(
+                    f"This course already exists in your draft schedule under a different section: "
+                    f"'{entry.course_code}'."
+                )
 
         # Add to draft
         entry = DraftScheduleEntry(course_code=section_id)
@@ -267,7 +276,14 @@ class CourseSelectionSystem:
                 # (originally part of ToolResult.data)
                 return ensure_english_message(message)
 
-        raise ValueError(f"Course '{section_id}' is not in your draft schedule.")
+        base_code = section_id.split("(")[0]
+        for entry in self._draft_schedule.selected_sections:
+            if entry.course_code.split("(")[0] == base_code:
+                raise ValueError(
+                    f"Course section '{section_id}' is not in your draft schedule. "
+                    f"However, a different section of the same course does exist: '{entry.course_code}'."
+                )
+        raise ValueError(f"Course section '{section_id}' is not in your draft schedule.")
 
     def assign_pass(self, section_id: str, pass_type: str) -> str:
         """
@@ -298,7 +314,16 @@ class CourseSelectionSystem:
                 # (originally part of ToolResult.data)
                 return ensure_english_message(message)
 
-        raise ValueError(f"Course '{section_id}' is not in your draft schedule.")
+        # Check if a different section of the same course is in the draft.
+        # Section IDs share a base code, e.g. "COMS0031131032" and "COMS0031131032(2)".
+        base_code = section_id.split("(")[0]
+        for entry in self._draft_schedule.selected_sections:
+            if entry.course_code.split("(")[0] == base_code:
+                raise ValueError(
+                    f"Course section '{section_id}' is not in your draft schedule. "
+                    f"However, a different section of the same course does exist: '{entry.course_code}'."
+                )
+        raise ValueError(f"Course section '{section_id}' is not in your draft schedule.")
 
     def view_draft(self) -> str:
         """
