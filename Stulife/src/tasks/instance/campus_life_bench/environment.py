@@ -728,7 +728,7 @@ class CampusEnvironment:
         return self.information_system.search_books(query, search_type)
 
     # Course selection / draft / registration
-    def raw_browse_courses(self, filters: Optional[Dict[str, Any]] = None) -> str:
+    def raw_browse_courses(self, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Browse available courses with optional filters.
 
         Course selection rules:
@@ -739,12 +739,18 @@ class CampusEnvironment:
             Compulsory pass budget: 1 S-Pass, 1 A-Pass, unlimited B-Passes.
 
         Pass guidelines:
-        - S-Pass: guarantees enrollment regardless of popularity (use for popularity 95-99).
-        - A-Pass: guarantees enrollment for popularity below 95.
-        - B-Pass: only usable for popularity below 85.
+        - S-Pass: guarantees enrollment for all courses, regardless of popularity.
+        - A-Pass: guarantees enrollment for many courses, but not the most popular ones.
+        - B-Pass: only usable for less popular courses.
 
         Available courses: 226 total (210 Semester 1, 16 Semester 2).
         Course types: "Compulsory" (46 courses), "Elective" (180 courses).
+
+        **IMPORTANT** Many courses have multiple sections with different instructors and
+        schedules. Each section has a unique section_id — e.g. "COMS0031131032"
+        and "COMS0031131032(2)" are two different sections of the same course.
+        When making pass changes to a course in your draft, you MUST use the EXACT section_id
+        that is already in your draft (check with view_draft()).
 
         Args:
             filters: Optional dict to narrow results:
