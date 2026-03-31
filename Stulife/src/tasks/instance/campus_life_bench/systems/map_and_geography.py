@@ -6,6 +6,7 @@ All natural language communications/returns MUST use English only
 import json
 import heapq
 import itertools
+import re
 from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
 from dataclasses import dataclass
@@ -133,6 +134,14 @@ class MapLookupSystem:
         if not building_id:
             raise ValueError("Building ID is required.")
 
+        # Validate building ID format (all IDs are "B" + 3 digits, e.g. "B001").
+        if not re.match(r'^B\d{3}$', building_id):
+            raise ValueError(
+                f"Invalid building ID '{building_id}'. "
+                f"Building IDs have the format 'B' + 3 digits (e.g. 'B001'). "
+                f"Use find_building_id() to look up a building's ID by name."
+            )
+
         for node in self._map_data["nodes"]:
             if node["id"] == building_id:
                 # Format amenities for display
@@ -218,6 +227,21 @@ class MapLookupSystem:
         """
         if not all([source_building_id, target_building_id]):
             raise ValueError("Both source and target building IDs are required.")
+
+        # Validate building ID format (all IDs are "B" + 3 digits, e.g. "B001").
+        for arg_name, bid in [("source", source_building_id), ("target", target_building_id)]:
+            if not re.match(r'^B\d{3}$', bid):
+                raise ValueError(
+                    f"Invalid {arg_name} building ID '{bid}'. "
+                    f"Building IDs have the format 'B' + 3 digits (e.g. 'B001'). "
+                    f"Use find_building_id() to look up a building's ID by name."
+                )
+
+        # Validate building IDs exist in the map.
+        node_ids = {node['id'] for node in self._map_data['nodes']}
+        for arg_name, bid in [("source", source_building_id), ("target", target_building_id)]:
+            if bid not in node_ids:
+                raise ValueError(f"Building '{bid}' does not exist.")
 
         if constraints is None:
             constraints = {}
@@ -387,6 +411,19 @@ class MapLookupSystem:
         if not building_id:
             raise ValueError("Building ID is required.")
 
+        # Validate building ID format (all IDs are "B" + 3 digits, e.g. "B001").
+        if not re.match(r'^B\d{3}$', building_id):
+            raise ValueError(
+                f"Invalid building ID '{building_id}'. "
+                f"Building IDs have the format 'B' + 3 digits (e.g. 'B001'). "
+                f"Use find_building_id() to look up a building's ID by name."
+            )
+
+        # Validate building exists
+        node_ids = {node['id'] for node in self._map_data['nodes']}
+        if building_id not in node_ids:
+            raise ValueError(f"Building '{building_id}' does not exist.")
+
         for complex_group in self._map_data.get("building_complexes", []):
             if building_id in complex_group.get("member_ids", []):
                 message = f"Building {building_id} is part of the '{complex_group.get('name', 'Unnamed')}' complex."
@@ -497,6 +534,21 @@ class GeographySystem:
         path = path_info["path"]
         if not isinstance(path, list) or len(path) < 2:
             raise ValueError("Invalid path. Must be a list with at least 2 locations.")
+
+        # Validate all building IDs in the path
+        node_ids = {node['id'] for node in self.map_lookup_system._map_data['nodes']}
+        for bid in path:
+            if not re.match(r'^B\d{3}$', bid):
+                raise ValueError(
+                    f"Invalid building ID '{bid}' in path. "
+                    f"Building IDs have the format 'B' + 3 digits (e.g. 'B001'). "
+                    f"Use find_building_id() to look up a building's ID by name."
+                )
+            if bid not in node_ids:
+                raise ValueError(
+                    f"Building '{bid}' in path does not exist. "
+                    f"Use find_optimal_path() to compute a valid path."
+                )
 
         # Validate starting location
         if path[0] != self._state.current_location_id:
