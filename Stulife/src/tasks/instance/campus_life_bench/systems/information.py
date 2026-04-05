@@ -105,7 +105,7 @@ class InformationSystem:
 
     # ========== Bibliography Query Tools ==========
 
-    def list_chapters(self, book_title: str) -> str:
+    def list_chapters(self, book_title: str) -> Dict[str, Any]:
         """
         List all chapters in the specified book
 
@@ -113,7 +113,7 @@ class InformationSystem:
             book_title: Title of the book
 
         Returns:
-            Human-readable chapter list
+            Dict with book_title and list of chapter dicts
 
         Raises:
             ValueError: If book_title is missing or book not found
@@ -124,20 +124,15 @@ class InformationSystem:
         # Find the book
         for book in self._bibliography_data["books"]:
             if book["book_title"].lower() == book_title.lower():
-                chapters = [chapter["chapter_title"] for chapter in book["chapters"]]
-
-                if chapters:
-                    message = f"Book '{book_title}' contains the following chapters: {', '.join(chapters)}."
-                else:
-                    message = f"Book '{book_title}' has no chapters."
-
-                # TODO: also return structured {"book_title": book["book_title"], "chapters": chapters}?
-                # (originally part of ToolResult.data)
-                return message
+                chapters = [
+                    {"chapter_title": chapter["chapter_title"], "chapter_id": i}
+                    for i, chapter in enumerate(book["chapters"])
+                ]
+                return {"book_title": book["book_title"], "chapters": chapters}
 
         raise ValueError(f"Book '{book_title}' not found.")
 
-    def list_sections(self, book_title: str, chapter_title: str) -> str:
+    def list_sections(self, book_title: str, chapter_title: str) -> Dict[str, Any]:
         """
         List all sections in the specified chapter
 
@@ -146,7 +141,7 @@ class InformationSystem:
             chapter_title: Title of the chapter
 
         Returns:
-            Human-readable section list
+            Dict with book_title, chapter_title, and list of section dicts
 
         Raises:
             ValueError: If inputs are missing or book/chapter not found
@@ -159,22 +154,21 @@ class InformationSystem:
             if book["book_title"].lower() == book_title.lower():
                 for chapter in book["chapters"]:
                     if chapter["chapter_title"].lower() == chapter_title.lower():
-                        sections = [section["section_title"] for section in chapter["sections"]]
-
-                        if sections:
-                            message = f"Chapter '{chapter_title}' in book '{book_title}' contains the following sections: {', '.join(sections)}."
-                        else:
-                            message = f"Chapter '{chapter_title}' in book '{book_title}' has no sections."
-
-                        # TODO: also return structured {"book_title": book["book_title"], "chapter_title": chapter["chapter_title"], "sections": sections}?
-                        # (originally part of ToolResult.data)
-                        return message
+                        sections = [
+                            {"section_title": section["section_title"], "section_id": i}
+                            for i, section in enumerate(chapter["sections"])
+                        ]
+                        return {
+                            "book_title": book["book_title"],
+                            "chapter_title": chapter["chapter_title"],
+                            "sections": sections,
+                        }
 
                 raise ValueError(f"Chapter '{chapter_title}' not found in book '{book_title}'.")
 
         raise ValueError(f"Book '{book_title}' not found.")
 
-    def list_articles(self, book_title: str, chapter_title: str, section_title: str) -> str:
+    def list_articles(self, book_title: str, chapter_title: str, section_title: str) -> Dict[str, Any]:
         """
         List all articles in the specified section
 
@@ -184,7 +178,7 @@ class InformationSystem:
             section_title: Title of the section
 
         Returns:
-            Human-readable article list
+            Dict with book_title, chapter_title, section_title, and list of article dicts
 
         Raises:
             ValueError: If inputs are missing or book/chapter/section not found
@@ -199,16 +193,16 @@ class InformationSystem:
                     if chapter["chapter_title"].lower() == chapter_title.lower():
                         for section in chapter["sections"]:
                             if section["section_title"].lower() == section_title.lower():
-                                articles = [article["title"] for article in section["articles"]]
-
-                                if articles:
-                                    message = f"Section '{section_title}' contains the following articles: {', '.join(articles)}."
-                                else:
-                                    message = f"Section '{section_title}' has no articles."
-
-                                # TODO: also return structured {"book_title": book["book_title"], "chapter_title": chapter["chapter_title"], "section_title": section["section_title"], "articles": articles}?
-                                # (originally part of ToolResult.data)
-                                return message
+                                articles = [
+                                    {"article_title": article["title"], "article_id": article["article_id"]}
+                                    for article in section["articles"]
+                                ]
+                                return {
+                                    "book_title": book["book_title"],
+                                    "chapter_title": chapter["chapter_title"],
+                                    "section_title": section["section_title"],
+                                    "articles": articles,
+                                }
 
                         raise ValueError(f"Section '{section_title}' not found in chapter '{chapter_title}'.")
 
@@ -216,7 +210,7 @@ class InformationSystem:
 
         raise ValueError(f"Book '{book_title}' not found.")
 
-    def view_article(self, identifier: str, by: str) -> str:
+    def view_article(self, identifier: str, by: str) -> Dict[str, Any]:
         """
         View the full content of an article
 
@@ -225,7 +219,7 @@ class InformationSystem:
             by: Search method - "title" or "id"
 
         Returns:
-            Human-readable article content
+            Dict with article title, id, and content
 
         Raises:
             ValueError: If inputs are missing/invalid or article not found
@@ -242,11 +236,9 @@ class InformationSystem:
                 for section in chapter["sections"]:
                     for article in section["articles"]:
                         if by == "title" and article["title"].lower() == identifier.lower():
-                            # TODO: also return the raw article dict? (originally part of ToolResult.data)
-                            return f"Article: {article['title']}\n\n{article['body']}"
+                            return {"title": article["title"], "article_id": article["article_id"], "content": article["body"]}
                         elif by == "id" and article["article_id"] == identifier:
-                            # TODO: also return the raw article dict? (originally part of ToolResult.data)
-                            return f"Article: {article['title']}\n\n{article['body']}"
+                            return {"title": article["title"], "article_id": article["article_id"], "content": article["body"]}
 
         raise ValueError(f"Article with {by} '{identifier}' not found.")
 
@@ -411,7 +403,7 @@ class InformationSystem:
 
     # ========== Library Books Query Tools ==========
 
-    def list_books_by_category(self, category: str) -> str:
+    def list_books_by_category(self, category: str) -> List[Dict[str, Any]]:
         """
         List all library books by category
 
@@ -419,7 +411,7 @@ class InformationSystem:
             category: Category to filter by
 
         Returns:
-            Human-readable list of matching books
+            List of matching book dicts
 
         Raises:
             ValueError: If category is missing or library books data not available
@@ -443,18 +435,9 @@ class InformationSystem:
                     "location": book.get("location", "")
                 })
 
-        if matching_books:
-            message = f"Found {len(matching_books)} book(s) in category '{category}':"
-            for book in matching_books:
-                status_indicator = "✓" if book["status"] == "Available" else "✗"
-                message += f"\n- {status_indicator} \"{book['title']}\" by {book['author']} (Call Number: {book['call_number']}, Type: {book['type']}, Location: {book['location']})"
-        else:
-            message = f"No books found in category '{category}'."
+        return matching_books
 
-        # TODO: also return structured {"books": matching_books}? (originally part of ToolResult.data)
-        return message
-
-    def search_books(self, query: str, search_type: str = "title") -> str:
+    def search_books(self, query: str, search_type: str = "title") -> List[Dict[str, Any]]:
         """
         Search library books by title or author
 
@@ -463,7 +446,7 @@ class InformationSystem:
             search_type: "title" or "author"
 
         Returns:
-            Human-readable list of matching books
+            List of matching book dicts
 
         Raises:
             ValueError: If query is missing, search_type is invalid, or library data unavailable
@@ -498,16 +481,7 @@ class InformationSystem:
                     "location": book.get("location", "")
                 })
 
-        if matching_books:
-            message = f"Found {len(matching_books)} book(s) matching '{query}' in {search_type}:"
-            for book in matching_books:
-                status_indicator = "✓" if book["status"] == "Available" else "✗"
-                message += f"\n- {status_indicator} \"{book['title']}\" by {book['author']} ({book['category']}, Call Number: {book['call_number']}, Type: {book['type']}, Location: {book['location']})"
-        else:
-            message = f"No books found matching '{query}' in {search_type}."
-
-        # TODO: also return structured {"books": matching_books}? (originally part of ToolResult.data)
-        return message
+        return matching_books
 
     def get_campus_data(self) -> Optional[Dict[str, Any]]:
         """

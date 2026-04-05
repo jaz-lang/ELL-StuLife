@@ -713,7 +713,7 @@ class CampusEnvironment:
         return self.reservation_system.make_booking(location_id, item_name, date, time_slot, seat_id)
 
     # Information / bibliography
-    def raw_list_chapters(self, book_title: str) -> str:
+    def raw_list_chapters(self, book_title: str) -> Dict[str, Any]:
         """List all chapters in a textbook or handbook.
 
         Use this for querying assigned textbooks and handbooks only.
@@ -731,11 +731,11 @@ class CampusEnvironment:
             book_title: Exact title of the book.
 
         Returns:
-            Human-readable result string.
+            Dict with book_title and list of chapter dicts.
         """
         return self.information_system.list_chapters(book_title)
 
-    def raw_list_sections(self, book_title: str, chapter_title: str) -> str:
+    def raw_list_sections(self, book_title: str, chapter_title: str) -> Dict[str, Any]:
         """List all sections in a chapter of a textbook or handbook.
 
         Args:
@@ -743,11 +743,11 @@ class CampusEnvironment:
             chapter_title: Exact title of the chapter.
 
         Returns:
-            Human-readable result string.
+            Dict with book_title, chapter_title, and list of section dicts.
         """
         return self.information_system.list_sections(book_title, chapter_title)
 
-    def raw_list_articles(self, book_title: str, chapter_title: str, section_title: str) -> str:
+    def raw_list_articles(self, book_title: str, chapter_title: str, section_title: str) -> Dict[str, Any]:
         """List all articles in a section of a textbook or handbook.
 
         Args:
@@ -756,11 +756,11 @@ class CampusEnvironment:
             section_title: Exact title of the section.
 
         Returns:
-            Human-readable result string.
+            Dict with book_title, chapter_title, section_title, and list of article dicts.
         """
         return self.information_system.list_articles(book_title, chapter_title, section_title)
 
-    def raw_view_article(self, identifier: str, by: str) -> str:
+    def raw_view_article(self, identifier: str, by: str) -> Dict[str, Any]:
         """View the full content of an article from a textbook or handbook.
 
         Args:
@@ -768,7 +768,7 @@ class CampusEnvironment:
             by: Search method — "title" or "id".
 
         Returns:
-            Human-readable result string.
+            Dict with article title, id, and content.
         """
         return self.information_system.view_article(identifier, by)
 
@@ -808,7 +808,7 @@ class CampusEnvironment:
         """
         return self.information_system.query_by_identifier(identifier, by, entity_type)
 
-    def raw_list_books_by_category(self, category: str) -> str:
+    def raw_list_books_by_category(self, category: str) -> List[Dict[str, Any]]:
         """List all library books in a category.
 
         Available library book categories include: Neuroscience, Political Science, AI,
@@ -819,22 +819,21 @@ class CampusEnvironment:
             category: Category to filter by (e.g. "Computer Science").
 
         Returns:
-            Human-readable result string.
+            List of book dicts, each with title, author, call_number, type,
+            status ("Available" or "Checked Out"), category, and location.
         """
         return self.information_system.list_books_by_category(category)
 
-    def raw_search_books(self, query: str, search_type: str = "title") -> str:
+    def raw_search_books(self, query: str, search_type: str = "title") -> List[Dict[str, Any]]:
         """Search library books by title or author.
-
-        Returns books with availability status (Available/Checked Out), call numbers,
-        type, category, and location details.
 
         Args:
             query: Search query string.
             search_type: "title" (default) or "author".
 
         Returns:
-            Human-readable result string.
+            List of book dicts, each with title, author, call_number, type,
+            status ("Available" or "Checked Out"), category, and location.
         """
         return self.information_system.search_books(query, search_type)
 
