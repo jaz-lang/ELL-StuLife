@@ -353,28 +353,29 @@ class CampusEnvironment:
     # =========================================================================
     # Raw (unwrapped) tool methods — return str, raise ValueError on error.
     # Used by the JAZ integration (stulife_env.py) so agents receive plain
-    # strings instead of ToolResult objects.
+    # dicts/strings instead of ToolResult objects.
     # =========================================================================
 
     # Calendar
-    def raw_add_event(self, calendar_id: str, event_title: str, location: str, time: str, description: Optional[str] = None) -> str:
+    def raw_add_event(self, calendar_id: str, event_title: str, location: str, time: str, description: Optional[str] = None) -> None:
         """Add an event to a calendar.
 
         Args:
-            calendar_id: Use "self" for your personal calendar. For advisor or club calendars,
-                use their email address (e.g. "william.davis@example.com" or "art_club@example.com").
+            calendar_id: Use "self" for your personal calendar. For club calendars,
+                use the club ID (e.g. "club_c062") or club email address.
             event_title: Title of the event.
-            location: Location of the event.
+            location: Location of the event, as a human-readable string
+                (e.g. "Orwell Hall, Writing Center Annex (200)", "Online Meeting (Zoom)").
             time: Time of the event, format "Week X, Day, HH:MM-HH:MM"
                 (e.g. "Week 3, Monday, 15:00-16:00").
             description: Optional detailed description.
 
         Returns:
-            Human-readable result string.
+            None. Raises ValueError on failure.
         """
         return self.calendar_system.add_event(calendar_id, event_title, location, time, description)
 
-    def raw_remove_event(self, calendar_id: str, event_id: str) -> str:
+    def raw_remove_event(self, calendar_id: str, event_id: str) -> None:
         """Remove an event from a calendar.
 
         Args:
@@ -382,11 +383,11 @@ class CampusEnvironment:
             event_id: ID of the event to remove.
 
         Returns:
-            Human-readable result string.
+            None. Raises ValueError on failure.
         """
         return self.calendar_system.remove_event(calendar_id, event_id)
 
-    def raw_update_event(self, calendar_id: str, event_id: str, new_details: Dict[str, Any]) -> str:
+    def raw_update_event(self, calendar_id: str, event_id: str, new_details: Dict[str, Any]) -> None:
         """Update an existing calendar event.
 
         Args:
@@ -395,32 +396,53 @@ class CampusEnvironment:
             new_details: Dict of fields to update, e.g. {"location": "New Room", "time": "Week 3, Monday, 16:00-17:00"}.
 
         Returns:
-            Human-readable result string.
+            None. Raises ValueError on failure.
         """
         return self.calendar_system.update_event(calendar_id, event_id, new_details)
 
-    def raw_view_schedule(self, calendar_id: str, date: str) -> str:
+    def raw_view_schedule(self, calendar_id: str, date: str) -> list:
         """View all events on a specific date for a calendar.
+
+        Example — view and then remove an event::
+
+            events = campus.view_schedule("self", "Week 3, Monday")
+            for e in events:
+                if "Seminar" in e["title"]:
+                    campus.remove_event("self", e["event_id"])
 
         Args:
             calendar_id: Calendar identifier (e.g. "self", or an advisor/club email).
             date: Date to view, format "Week X, Day" (e.g. "Week 3, Monday").
 
         Returns:
-            Human-readable result string.
+            List of event dicts, each with event_id, title, location, time,
+            and description. Use ``event_id`` with ``remove_event()`` or
+            ``update_event()``. Empty list if no events.
         """
         return self.calendar_system.view_schedule(calendar_id, date)
 
-    def raw_query_advisor_availability(self, advisor_id: str, date: str) -> str:
+    def raw_query_advisor_availability(self, advisor_id: str, date: str) -> list:
         """Check an advisor's available time slots on a given date.
 
         Args:
-            advisor_id: Advisor identifier (e.g. "T0001").
+            advisor_id: Advisor identifier (e.g. "T0001"). Get this from the
+                ``advisor_id`` field in results from ``list_by_category()``
+                or ``query_by_identifier()``.
             date: Date to query, format "Week X, Day" (e.g. "Week 4, Tuesday").
 
         Returns:
-            Human-readable result string.
+            List of available time slot strings (e.g. ["09:00-10:00", "14:00-15:00"]).
         """
+        # Validate advisor exists
+        valid_ids = {
+            a["advisor_id"]
+            for a in self.information_system._data_system_data.get("advisors", [])
+        }
+        if advisor_id not in valid_ids:
+            raise ValueError(
+                f"Advisor '{advisor_id}' not found. "
+                f"Use list_by_category() or query_by_identifier() to look up advisors."
+            )
         return self.calendar_system.query_advisor_availability(advisor_id, date)
 
     # Map lookup

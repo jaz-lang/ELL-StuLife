@@ -164,12 +164,11 @@ class CalendarSystem:
             self._global_calendars[calendar_id] = []
 
             # Set permissions based on calendar type
-            if calendar_id.startswith("club_"):
+            if calendar_id == "self" or calendar_id.startswith("club_") or "@" in calendar_id:
                 self._permissions[calendar_id] = {"add", "view"}
             elif calendar_id.startswith("advisor_"):
                 self._permissions[calendar_id] = {"query_availability"}
             else:
-                # Default permissions for other calendars
                 self._permissions[calendar_id] = {"view"}
 
     def _has_permission(self, calendar_id: str, action: str) -> bool:
@@ -190,7 +189,7 @@ class CalendarSystem:
             description: Optional detailed description of the event
 
         Returns:
-            Human-readable success message
+            None. Raises ValueError on failure.
 
         Raises:
             ValueError: On invalid input or permission error
@@ -198,6 +197,16 @@ class CalendarSystem:
         # Validate inputs
         if not all([calendar_id, event_title, location, time]):
             raise ValueError("All parameters (calendar_id, event_title, location, time) are required.")
+
+        # Validate time format: "Week XX, Day, HH:MM-HH:MM"
+        if not re.match(
+            r'^Week \d+, (Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}:\d{2}-\d{2}:\d{2}$',
+            time
+        ):
+            raise ValueError(
+                f"Invalid time format '{time}'. "
+                f"Expected format: 'Week X, Day, HH:MM-HH:MM' (e.g. 'Week 20, Wednesday, 14:00-15:00')."
+            )
 
         # Check permissions
         if not self._has_permission(calendar_id, "add"):
@@ -228,12 +237,9 @@ class CalendarSystem:
                 }
             })
 
-        message = f"Event '{event_title}' has been successfully added to the calendar."
-        # TODO: also return structured {"event_id": event_id, "calendar_id": calendar_id}?
-        # (originally part of ToolResult.data)
-        return ensure_english_message(message)
+        return None
 
-    def remove_event(self, calendar_id: str, event_id: str) -> str:
+    def remove_event(self, calendar_id: str, event_id: str) -> None:
         """
         Remove an event from the specified calendar
         Permissions: self only
@@ -243,7 +249,7 @@ class CalendarSystem:
             event_id: Event identifier to remove
 
         Returns:
-            Human-readable success message
+            None. Raises ValueError on failure.
 
         Raises:
             ValueError: On invalid input, permission error, or event not found
@@ -273,12 +279,11 @@ class CalendarSystem:
                             "description": removed_event.description
                         }
                     })
-                message = f"Event '{removed_event.event_title}' has been successfully removed from the calendar."
-                return ensure_english_message(message)
+                return None
 
         raise ValueError(f"Event with ID '{event_id}' not found in calendar '{calendar_id}'.")
 
-    def update_event(self, calendar_id: str, event_id: str, new_details: Dict[str, Any]) -> str:
+    def update_event(self, calendar_id: str, event_id: str, new_details: Dict[str, Any]) -> None:
         """
         Update an event in the specified calendar
         Permissions: self only
@@ -289,7 +294,7 @@ class CalendarSystem:
             new_details: Dictionary with new event details
 
         Returns:
-            Human-readable success message
+            None. Raises ValueError on failure.
 
         Raises:
             ValueError: On invalid input, permission error, or event not found
@@ -301,6 +306,26 @@ class CalendarSystem:
         # Check permissions
         if not self._has_permission(calendar_id, "update"):
             raise ValueError(f"You do not have permission to update events in calendar '{calendar_id}'.")
+
+        # Validate new_details keys
+        valid_keys = {"event_title", "location", "time", "description"}
+        unknown_keys = set(new_details.keys()) - valid_keys
+        if unknown_keys:
+            raise ValueError(
+                f"Unknown keys in new_details: {unknown_keys}. "
+                f"Valid keys are: 'event_title', 'location', 'time', 'description'."
+            )
+
+        # Validate time format if provided
+        if "time" in new_details:
+            if not re.match(
+                r'^Week \d+, (Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}:\d{2}-\d{2}:\d{2}$',
+                new_details["time"]
+            ):
+                raise ValueError(
+                    f"Invalid time format '{new_details['time']}'. "
+                    f"Expected format: 'Week X, Day, HH:MM-HH:MM' (e.g. 'Week 20, Wednesday, 14:00-15:00')."
+                )
 
         # Find and update event
         calendar = self._global_calendars.get(calendar_id, [])
@@ -337,12 +362,11 @@ class CalendarSystem:
                         }
                     })
 
-                message = f"Event '{event.event_title}' has been successfully updated."
-                return ensure_english_message(message)
+                return None
 
         raise ValueError(f"Event with ID '{event_id}' not found in calendar '{calendar_id}'.")
 
-    def view_schedule(self, calendar_id: str, date: str) -> str:
+    def view_schedule(self, calendar_id: str, date: str) -> dict:
         """
         View schedule for the specified calendar and date
         Permissions: self, club_id
@@ -352,7 +376,7 @@ class CalendarSystem:
             date: Date to view (e.g., "Week 20, Wednesday")
 
         Returns:
-            Human-readable schedule information
+            Dict with calendar_id, date, and events list
 
         Raises:
             ValueError: On invalid input or permission error
@@ -360,6 +384,16 @@ class CalendarSystem:
         # Validate inputs
         if not all([calendar_id, date]):
             raise ValueError("Both calendar_id and date are required.")
+
+        # Validate date format
+        if not re.match(
+            r'^Week \d+, (Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$',
+            date
+        ):
+            raise ValueError(
+                f"Invalid date format '{date}'. "
+                f"Expected format: 'Week X, Day' (e.g. 'Week 4, Tuesday')."
+            )
 
         # Check permissions
         if not self._has_permission(calendar_id, "view"):
@@ -369,23 +403,18 @@ class CalendarSystem:
         calendar = self._global_calendars.get(calendar_id, [])
         events_on_date = [event for event in calendar if self._is_date_match(date, event.time)]
 
-        if not events_on_date:
-            message = f"No events found for {date} in calendar '{calendar_id}'."
-            # TODO: also return structured {"events": []}? (originally part of ToolResult.data)
-            return ensure_english_message(message)
+        return [
+            {
+                "event_id": event.event_id,
+                "title": event.event_title,
+                "location": event.location,
+                "time": event.time,
+                "description": event.description,
+            }
+            for event in events_on_date
+        ]
 
-        # Format events for display
-        message = f"Found {len(events_on_date)} event(s) for {date}:"
-        for event in events_on_date:
-            message += f"\n- {event.event_title} at {event.location} ({event.time})"
-            if event.description:
-                message += f"\n  Description: {event.description}"
-
-        # TODO: also return structured {"events": [{"event_id": ..., "title": ..., "location": ..., "time": ..., "description": ...}, ...]}?
-        # (originally part of ToolResult.data)
-        return ensure_english_message(message)
-
-    def query_advisor_availability(self, advisor_id: str, date: str) -> str:
+    def query_advisor_availability(self, advisor_id: str, date: str) -> dict:
         """
         Query advisor availability for the specified date
         Returns available time slots without event details
@@ -396,7 +425,7 @@ class CalendarSystem:
             date: Date to query
 
         Returns:
-            Human-readable availability information
+            Dict with advisor_id, date, and available_slots list
 
         Raises:
             ValueError: On invalid input
@@ -404,6 +433,16 @@ class CalendarSystem:
         # Validate inputs
         if not all([advisor_id, date]):
             raise ValueError("Both advisor_id and date are required.")
+
+        # Validate date format
+        if not re.match(
+            r'^Week \d+, (Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$',
+            date
+        ):
+            raise ValueError(
+                f"Invalid date format '{date}'. "
+                f"Expected format: 'Week X, Day' (e.g. 'Week 4, Tuesday')."
+            )
 
         # Check if advisor availability is set via world_state_change
         if (advisor_id in self._advisor_availability_settings and
@@ -436,14 +475,7 @@ class CalendarSystem:
 
             available_slots = [slot for slot in all_slots if slot not in busy_slots]
 
-        if available_slots:
-            message = f"Advisor {advisor_id} is available on {date} during the following time slots: {', '.join(available_slots)}."
-        else:
-            message = f"Advisor {advisor_id} has no available time slots on {date}."
-
-        # TODO: also return structured {"advisor_id": advisor_id, "date": date, "available_slots": available_slots}?
-        # (originally part of ToolResult.data)
-        return ensure_english_message(message)
+        return available_slots
 
     def get_and_clear_self_schedule_changes(self) -> List[Dict[str, Any]]:
         """
