@@ -685,32 +685,148 @@ class CampusEnvironment:
         return self.geography_system.get_current_location()
 
     # Reservation
-    def raw_query_availability(self, location_id: str, date: str) -> str:
-        """Query availability of bookable spaces (rooms, seats) at a location.
+    def raw_query_availability(self, building_id: str, date: str,
+                               time_slot: str, features: List[str]) -> dict:
+        """Query availability of bookable amenities and seats in a building.
+
+        **Always call this before make_booking.**  Returns only time slots that
+        fully cover ``time_slot`` (start ≤ your start, end ≥ your end), ordered
+        from shortest to longest.  Only seats satisfing all requested ``features``
+        are included; amenities with no matching seats are omitted.
+
+        IMPORTANT: You must always filter on ALL desired features.
+
+        Example::
+
+            avail = campus.query_availability(
+                "B042", "Week 2, Thursday", "15:45-19:15",
+                features=["natural_lighting", "whiteboard", "good_wifi", "quiet_zone"])
+            # Returns only slots covering 15:45–19:15, tightest fit first.
+            # Only seats satisfying all features are returned.
+
+        The **amenity name keys** (e.g. ``"Lecture Hall (101)"``) are the valid
+        ``amenity`` values for ``make_booking()``.  Amenities with
+        ``"status": "available"`` can be booked directly by name (no seat_id);
+        amenities with a ``"seats"`` list require choosing a ``seat_id``.
+
+        Valid feature names: ``comfortable_seating``, ``computer_access``,
+        ``convenient_location``, ``discussion_zone``, ``good_wifi``,
+        ``group_room``, ``historical_archives``, ``large_table``,
+        ``low_traffic_area``, ``natural_lighting``, ``power_outlet``,
+        ``private_space``, ``projector``, ``quiet_zone``,
+        ``reference_materials``, ``sofa_area``, ``specialized_collections``,
+        ``technical_resources``, ``whiteboard``, ``window_seat``.
 
         Args:
-            location_id: Building ID (e.g. "B001").
+            building_id: Building ID (e.g. "B001").
             date: Date to query, format "Week X, Day" (e.g. "Week 4, Saturday").
+            time_slot: Required time range, format "HH:MM-HH:MM"
+                (e.g. "15:45-19:15").  Only slots that fully cover this range
+                are returned.
+            features: List of required feature names (see list above).
+                Only seats whose features are a superset of this list are
+                included.  Pass ``[]`` if no feature filtering is needed.
 
         Returns:
-            Human-readable result string.
+            Dict mapping time slots to floors to amenity dicts, ordered from
+            shortest to longest slot.
         """
-        return self.reservation_system.query_availability(location_id, date)
+        result = self.reservation_system.query_availability(building_id, date)
+        result = self._filter_availability_by_time(result, time_slot)
+        if features:
+            required = set(features)
+            result = self._filter_availability_by_features(result, required)
+        return result
 
-    def raw_make_booking(self, location_id: str, item_name: str, date: str, time_slot: str, seat_id: Optional[str] = None) -> str:
-        """Book a specific room or seat at a location.
+    @staticmethod
+    def _parse_time_slot(slot: str) -> tuple[int, int]:
+        """Parse 'HH:MM-HH:MM' into (start_minutes, end_minutes)."""
+        start, end = slot.split("-")
+        sh, sm = start.split(":")
+        eh, em = end.split(":")
+        return int(sh) * 60 + int(sm), int(eh) * 60 + int(em)
+
+    @classmethod
+    def _filter_availability_by_time(cls, avail: dict, query_slot: str) -> dict:
+        """Keep only slots that fully cover *query_slot*, ordered shortest first."""
+        q_start, q_end = cls._parse_time_slot(query_slot)
+        matching: list[tuple[int, str, dict]] = []
+        for slot, floors in avail.items():
+            s_start, s_end = cls._parse_time_slot(slot)
+            if s_start <= q_start and s_end >= q_end:
+                duration = s_end - s_start
+                matching.append((duration, slot, floors))
+        matching.sort()  # shortest duration first
+        return {slot: floors for _, slot, floors in matching}
+
+    @staticmethod
+    def _filter_availability_by_features(avail: dict, required: set) -> dict:
+        """Remove seats that don't have all *required* features.
+
+        Amenities left with an empty seat list are dropped.  Facility-only
+        amenities (``"status": "available"``, no ``"seats"`` key) are kept.
+        """
+        filtered: dict = {}
+        for slot, floors in avail.items():
+            filtered_floors: dict = {}
+            for floor, amenities in floors.items():
+                filtered_amenities: dict = {}
+                for name, info in amenities.items():
+                    if "seats" in info:
+                        matching = [
+                            s for s in info["seats"]
+                            if required.issubset(set(s.get("features", [])))
+                        ]
+                        if matching:
+                            filtered_amenities[name] = {**info, "seats": matching}
+                    else:
+                        # Facility-only amenity — keep as-is
+                        filtered_amenities[name] = info
+                if filtered_amenities:
+                    filtered_floors[floor] = filtered_amenities
+            if filtered_floors:
+                filtered[slot] = filtered_floors
+        return filtered
+
+    def raw_make_booking(self, location_id: str, amenity: str, date: str, time_slot: str, seat_id: Optional[str] = None) -> None:
+        """Book a specific amenity or seat in a building.
+
+        Example seat-booking workflow (spread across multiple REPL iterations)::
+
+            # Iteration 1: Find the library for the subject area mentioned in
+            # the task (if the building ID is not already provided), and walk there.
+            lib = campus.find_library("engineering")
+            bid = lib["id"]
+            cur = campus.get_current_location()
+            campus.walk_to(campus.find_optimal_path(cur["id"], bid))
+
+            # Iteration 2: Query with time slot and filter on ALL desired features
+            avail = campus.query_availability(bid, "Week 2, Thursday",
+                        "14:30-18:00",
+                        features=["natural_lighting", "whiteboard", "good_wifi"])
+            print(avail)  # only covering slots with ALL features shown
+
+            # Iteration 3: Book the chosen seat (use slot, amenity, seat_id
+            # from the query result)
+            campus.make_booking(bid, "Lecture Hall (101)",
+                                "Week 2, Thursday", "14:30-18:00",
+                                seat_id="B042-101-S065")
 
         Args:
             location_id: Building ID.
-            item_name: Name of the room or area (e.g. "Group Study Room 201", "Study Area").
+            amenity: Name of the amenity. Must match an amenity name at the
+                building — use ``query_availability()`` to discover valid names.
             date: Date for the booking, format "Week X, Day".
             time_slot: Time slot to book (e.g. "14:00-16:00").
-            seat_id: Optional specific seat ID (e.g. "B001-F01-S001") when booking a seat.
+            seat_id: Seat ID when booking a specific seat within an amenity
+                (e.g. "B042-101-S065"). Required when the task asks you to
+                find a seat with specific features. Get valid seat IDs from
+                ``query_availability()`` results.
 
         Returns:
-            Human-readable result string.
+            None. Raises ValueError on failure.
         """
-        return self.reservation_system.make_booking(location_id, item_name, date, time_slot, seat_id)
+        return self.reservation_system.make_booking(location_id, amenity, date, time_slot, seat_id)
 
     # Information / bibliography
     def raw_list_chapters(self, book_title: str) -> Dict[str, Any]:

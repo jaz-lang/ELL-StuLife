@@ -4,6 +4,7 @@ All natural language communications/returns MUST use English only
 """
 
 import random
+import re
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 
@@ -27,7 +28,7 @@ class ReservationRecord:
 class ReservationSystem:
     """
     Intelligent reservation system with dynamic availability generation
-    Supports both facility and seat reservations with global state persistence
+    Supports both amenity and seat reservations with global state persistence
     """
 
     def __init__(self, map_lookup_system: MapLookupSystem, information_system: InformationSystem):
@@ -78,27 +79,47 @@ class ReservationSystem:
         """
         self._current_task_context = task_data
 
-    def query_availability(self, location_id: str, date: str) -> str:
+    def query_availability(self, building_id: str, date: str) -> dict:
         """
-        Query availability for a location on a specific date
-        Uses intelligent availability generation based on current task context
+        Query availability for a building on a specific date.
+
+        Returns the names of all bookable amenities at the building
+        along with their availability status. Always call this before
+        make_booking() to discover valid room names.
 
         Args:
-            location_id: Building ID to query
-            date: Date to query (e.g., "Week 4, Saturday")
+            building_id: Building ID to query (e.g. "B001")
+            date: Date to query, format "Week X, Day" (e.g. "Week 4, Saturday")
 
         Returns:
-            Human-readable availability information
+            Dict with building_id, building_name, date, and availability info
 
         Raises:
             ValueError: On invalid input or building not found
         """
-        if not all([location_id, date]):
-            raise ValueError("Both location_id and date are required.")
+        if not all([building_id, date]):
+            raise ValueError("Both building_id and date are required.")
+
+        # Validate building_id format (B + 3 digits)
+        if not re.match(r'^B\d{3}$', building_id):
+            raise ValueError(
+                f"Invalid building_id '{building_id}'. "
+                f"Must be a building ID in the format 'B' + 3 digits (e.g. 'B001')."
+            )
+
+        # Validate date format: "Week X, Day"
+        if not re.match(
+            r'^Week \d+, (Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$',
+            date
+        ):
+            raise ValueError(
+                f"Invalid date format '{date}'. "
+                f"Expected format: 'Week X, Day' (e.g. 'Week 4, Saturday')."
+            )
 
         # Get building details via _get_node for structured data
-        building_data = self.map_lookup_system._get_node(location_id)
-        building_name = building_data.get("name", location_id)
+        building_data = self.map_lookup_system._get_node(building_id)
+        building_name = building_data.get("name", building_id)
 
         # Decide generation strategy based on ground_truth
         availability = {}
@@ -115,42 +136,7 @@ class ReservationSystem:
             # For all other tasks, generate random hierarchical availability
             availability = self._generate_random_hierarchical_availability(building_data, date)
 
-        # Format availability message with hierarchy
-        message = f"Availability query successful! {building_name} on {date}:"
-
-        for time_slot, floors in availability.items():
-            if not floors:
-                continue
-            message += f"\n- Time slot {time_slot}:"
-            # Handle both formats: with and without floor keys
-            if any(key.startswith("floor_") for key in floors.keys()):
-                # Format with floors
-                for floor, facilities in floors.items():
-                    message += f"\n  - {floor}:"
-                    for facility_name, facility_info in facilities.items():
-                        message += f"\n    - Facility: {facility_name}"
-                        if "seats" in facility_info and facility_info["seats"]:
-                            for seat in facility_info["seats"]:
-                                if isinstance(seat, dict) and seat.get("status") != "booked":
-                                    features_str = ", ".join(seat.get("features", []))
-                                    message += f"\n      - Available seat: {seat.get('seat_id', 'Unknown ID')} with features: [{features_str}]"
-                        else:
-                            message += " (Available)"
-            else:
-                # Format without floors (for deterministic results)
-                for facility_name, facility_info in floors.items():
-                    message += f"\n  - Facility: {facility_name}"
-                    if "seats" in facility_info and facility_info["seats"]:
-                        for seat in facility_info["seats"]:
-                            if isinstance(seat, dict) and seat.get("status") != "booked":
-                                features_str = ", ".join(seat.get("features", []))
-                                message += f"\n    - Available seat: {seat.get('seat_id', 'Unknown ID')} with features: [{features_str}]"
-                    else:
-                        message += " (Available)"
-
-        # TODO: also return structured {"location_id": location_id, "building_name": building_name, "date": date, "availability": availability}?
-        # (originally part of ToolResult.data)
-        return ensure_english_message(message)
+        return availability
 
     def _is_target_location(self, location_id: str, date: str, building_data: Optional[Dict[str, Any]]) -> bool:
         """
@@ -252,8 +238,17 @@ class ReservationSystem:
             seats_for_target_slot.extend(random.sample(distractor_seats, k=num_distractors_to_add))
 
         random.shuffle(seats_for_target_slot)
+        # Wrap in floor key for consistency with hierarchical mode
+        target_floor = "floor_1"
+        if target_room_data:
+            # Find the actual floor from detailed data
+            for fl, rooms in detailed_building_data.get("internal_amenities", {}).items():
+                for room in rooms:
+                    if isinstance(room, dict) and room.get("room_name") == target_item_name:
+                        target_floor = fl
+                        break
         availability[target_time_slot] = {
-            target_item_name: {"seats": seats_for_target_slot}
+            target_floor: {target_item_name: {"seats": seats_for_target_slot}}
         }
 
         # 5. Generate availability for other time slots using only distractors or a subset of real seats
@@ -265,7 +260,7 @@ class ReservationSystem:
             num_other_seats = min(len(all_real_seats_in_room), 5)
             other_seats_sample = random.sample(all_real_seats_in_room, k=num_other_seats)
             availability[slot] = {
-                target_item_name: {"seats": other_seats_sample}
+                target_floor: {target_item_name: {"seats": other_seats_sample}}
             }
 
         return availability
@@ -290,6 +285,21 @@ class ReservationSystem:
         availability = {}
         time_slots = ["09:00-10:30", "10:30-12:00", "14:00-15:30", "15:30-17:00", "16:30-18:00"]
 
+        # Include all GT time slots so the correct answers are always available.
+        # GT may have: top-level time_slot, reservation_made.time_slot, or
+        # reservation_made_1/2/3.time_slot for multi-reservation tasks.
+        if self._current_task_context:
+            gt = self._current_task_context.get("ground_truth", {})
+            if isinstance(gt, dict):
+                for gk, gv in gt.items():
+                    slot = None
+                    if gk == "time_slot":
+                        slot = gv
+                    elif isinstance(gv, dict):
+                        slot = gv.get("time_slot")
+                    if slot and slot not in time_slots:
+                        time_slots.append(slot)
+
         # 1. Get building amenities from the primary building_data which is from map_v1.5.json
         amenities_from_map = building_data.get("internal_amenities", {})
         if not amenities_from_map or not isinstance(amenities_from_map, dict):
@@ -299,12 +309,12 @@ class ReservationSystem:
         location_id = building_data.get("id")
         detailed_building_data = next((lib for lib in self._campus_data.get("library_seats", {}).get("libraries", []) if lib.get("id") == location_id), None)
 
-        if not detailed_building_data:
-            return {}  # Cannot generate availability without detailed seat info
+        # detailed_building_data may be None for non-library buildings — that's
+        # fine; amenities without detailed seat info get {"status": "available"}.
 
         # 3. Create a lookup for detailed room info
         room_details_lookup = {}
-        for floor, rooms in detailed_building_data.get("internal_amenities", {}).items():
+        for floor, rooms in (detailed_building_data or {}).get("internal_amenities", {}).items():
             for room in rooms:
                 if isinstance(room, dict) and "room_name" in room:
                     room_details_lookup[room["room_name"]] = room
@@ -316,20 +326,25 @@ class ReservationSystem:
             for floor, room_names in amenities_from_map.items():
                 floor_amenities = {}
                 for room_name in room_names:
-                    # Look up detailed info in campus_data
+                    # Look up detailed info in campus_data.
+                    # Map names may have a suffix (e.g. "Lecture Hall (101)")
+                    # while campus_data uses the base name ("Lecture Hall").
                     detailed_room = room_details_lookup.get(room_name)
+                    if not detailed_room:
+                        for base_name, room_data in room_details_lookup.items():
+                            if room_name.startswith(base_name + " ("):
+                                detailed_room = room_data
+                                break
 
                     if detailed_room:
                         seats = detailed_room.get("seats", [])
-                        # Limit the number of seats shown to 10
-                        seats_to_show = random.sample(seats, k=min(len(seats), 10))
                         floor_amenities[room_name] = {
-                            "seats": seats_to_show,
+                            "seats": seats,
                             "features": detailed_room.get("features", [])
                         }
                     else:
                         # If no detailed info, mark as available without seats
-                        floor_amenities[room_name] = {"seats": []}
+                        floor_amenities[room_name] = {"status": "available"}
 
                 if floor_amenities:
                     if floor not in availability[slot]:
@@ -361,41 +376,136 @@ class ReservationSystem:
         except:
             return f"{start_time}-{start_time}"  # Fallback
 
-    def make_booking(self, location_id: str, item_name: str, date: str, time_slot: str, seat_id: Optional[str] = None) -> str:
+    def make_booking(self, building_id: str, item_name: str, date: str, time_slot: str, seat_id: Optional[str] = None) -> None:
         """
-        Make a booking for a location/seat
+        Make a booking for a building/seat.
+
+        The item_name must exactly match an amenity name at the building.
+        Call query_availability(building_id, date) first to discover valid
+        names; an invalid name raises ValueError.
 
         Args:
-            location_id: Building ID
-            item_name: Name of facility or room to book
-            date: Date for booking
-            time_slot: Time slot for booking
-            seat_id: Optional seat ID for seat bookings
+            building_id: Building ID (e.g. "B001")
+            item_name: Exact name of the room or area to book (e.g. "Group
+                Study Room 201", "Study Area"). Must match a room at the
+                building — use query_availability() to discover valid names.
+            date: Date for booking, format "Week X, Day" (e.g. "Week 4, Saturday")
+            time_slot: Time slot to book (e.g. "14:00-16:00")
+            seat_id: Optional specific seat ID (e.g. "B001-F01-S001") for seat bookings
 
         Returns:
-            Human-readable booking confirmation
+            None. Raises ValueError on failure.
 
         Raises:
-            ValueError: On missing inputs or booking conflict
+            ValueError: On missing inputs, invalid room name, or booking conflict
         """
-        if not all([location_id, item_name, date, time_slot]):
-            raise ValueError("Location ID, item name, date, and time slot are all required.")
+        if not all([building_id, item_name, date, time_slot]):
+            raise ValueError("building ID, amenity, date, and time slot are all required.")
+
+        # Validate building_id format (B + 3 digits)
+        if not re.match(r'^B\d{3}$', building_id):
+            raise ValueError(
+                f"Invalid building_id '{building_id}'. "
+                f"Must be a building ID in the format 'B' + 3 digits (e.g. 'B001')."
+            )
+
+        # Validate date format: "Week X, Day"
+        if not re.match(r'^Week \d+, (Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$', date):
+            raise ValueError(
+                f"Invalid date format '{date}'. "
+                f"Expected format: 'Week X, Day' (e.g. 'Week 4, Saturday')."
+            )
+
+        # Validate time_slot format: "HH:MM-HH:MM"
+        if not re.match(r'^\d{2}:\d{2}-\d{2}:\d{2}$', time_slot):
+            raise ValueError(
+                f"Invalid time_slot format '{time_slot}'. "
+                f"Expected format: 'HH:MM-HH:MM' (e.g. '14:00-16:00')."
+            )
+
+        # Validate that the building exists
+        building_data = self.map_lookup_system._get_node(building_id)
+
+        # Validate item_name against the building's actual bookable items.
+        # The map data stores room names with suffixes like "(101)" or "(B11)";
+        # accept if item_name matches the start of any room name.
+        internal_amenities = building_data.get("internal_amenities", {})
+        all_room_names = []
+        for floor_rooms in internal_amenities.values():
+            if isinstance(floor_rooms, list):
+                all_room_names.extend(floor_rooms)
+        if all_room_names:
+            match = any(
+                room_name == item_name or room_name.startswith(item_name + " (")
+                for room_name in all_room_names
+            )
+            if not match:
+                building_name = building_data.get("name", building_id)
+                raise ValueError(
+                    f"'{item_name}' is not a bookable amenity at {building_name} ({building_id}). "
+                    f"Available amenities: {all_room_names}. "
+                    f"Use query_availability({building_id!r}, <date>) to see what's available."
+                )
+
+        # Validate seat_id against amenity seat data
+        detailed_building = next(
+            (lib for lib in self._campus_data.get("library_seats", {}).get("libraries", [])
+             if lib.get("id") == building_id), None
+        )
+        amenity_seat_ids = set()
+        if detailed_building:
+            for floor, rooms in detailed_building.get("internal_amenities", {}).items():
+                for room in rooms:
+                    if isinstance(room, dict) and (
+                        room.get("room_name") == item_name
+                        or room.get("room_name", "").startswith(item_name + " (")
+                        or item_name.startswith(room.get("room_name", "") + " (")
+                    ):
+                        for seat in room.get("seats", []):
+                            amenity_seat_ids.add(seat["seat_id"])
+
+        if seat_id:
+            if not seat_id.startswith(building_id + "-"):
+                raise ValueError(
+                    f"Invalid seat_id '{seat_id}': must start with building ID '{building_id}-'."
+                )
+            if not detailed_building:
+                raise ValueError(
+                    f"Building '{building_id}' does not have bookable seats. "
+                    f"Do not pass seat_id when booking at this building."
+                )
+            if not amenity_seat_ids:
+                raise ValueError(
+                    f"Amenity '{item_name}' at {building_data.get('name', building_id)} does not have individual seats. "
+                    f"Book without seat_id, or choose a different amenity."
+                )
+            if seat_id not in amenity_seat_ids:
+                raise ValueError(
+                    f"Seat '{seat_id}' does not exist in '{item_name}' at {building_data.get('name', building_id)}. "
+                    f"Use query_availability({building_id!r}, <date>) to see available seats."
+                )
+        elif amenity_seat_ids:
+            raise ValueError(
+                f"Amenity '{item_name}' at {building_data.get('name', building_id)} has individual seats. "
+                f"You must specify a seat_id. "
+                f"Use query_availability({building_id!r}, <date>) to see available seats and their features."
+            )
 
         # Check for conflicts with existing reservations
         for reservation in self._global_reservations:
-            if (reservation.location_id == location_id and
+            if (reservation.location_id == building_id and
                     reservation.date == date and
                     self._time_slots_overlap(reservation.time_slot, time_slot)):
 
                 if ((seat_id and reservation.seat_id == seat_id) or
                         (not seat_id and reservation.item_name == item_name)):
-                    raise ValueError(f"The requested {item_name} is already booked for the specified time slot.")
+                    raise ValueError(f"The requested amenity '{item_name}' is already booked for the specified time slot.")
 
         # Create reservation record
         task_id = self._current_task_context.get("task_id", "unknown") if self._current_task_context else "unknown"
 
         reservation = ReservationRecord(
-            location_id=location_id,
+            location_id=building_id,
             area="floor_1",  # Default area
             item_name=item_name,
             seat_id=seat_id,
@@ -407,16 +517,7 @@ class ReservationSystem:
         # Add to global reservations
         self._global_reservations.append(reservation)
 
-        # Generate success message
-        if seat_id:
-            message = f"Booking successful! You have successfully reserved seat {seat_id} in {item_name} for {date} from {time_slot}."
-        else:
-            message = f"Booking successful! You have successfully reserved {item_name} for {date} from {time_slot}."
-
-        # TODO: also return structured {"reservation_id": len(self._global_reservations), "location_id": location_id,
-        # "item_name": item_name, "seat_id": seat_id, "date": date, "time_slot": time_slot}?
-        # (originally part of ToolResult.data)
-        return ensure_english_message(message)
+        return None
 
     def _time_slots_overlap(self, slot1: str, slot2: str) -> bool:
         """
