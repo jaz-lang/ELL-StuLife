@@ -118,7 +118,7 @@ class MapLookupSystem:
 
         raise ValueError(f"Building '{building_name}' not found.")
 
-    def get_building_details(self, building_id: str) -> str:
+    def get_building_details(self, building_id: str) -> Dict[str, Any]:
         """
         Get detailed information about a building
 
@@ -126,7 +126,7 @@ class MapLookupSystem:
             building_id: Building ID to get details for
 
         Returns:
-            Human-readable building details
+            Dict with building_id, name, type, zone, aliases, and internal_amenities
 
         Raises:
             ValueError: If building_id is missing or not found
@@ -144,24 +144,18 @@ class MapLookupSystem:
 
         for node in self._map_data["nodes"]:
             if node["id"] == building_id:
-                # Format amenities for display
-                amenities_text = ""
-                for floor, items in node.get("internal_amenities", {}).items():
-                    amenities_text += f"\n  {floor}: {', '.join(items)}"
-
-                message = f"Building Details for {node['name']} (ID: {building_id}):"
-                message += f"\n- Type: {node.get('type', 'Unknown')}"
-                message += f"\n- Zone: {node.get('zone', 'Unknown')}"
-                message += f"\n- Aliases: {', '.join(node.get('aliases', []))}"
-                if amenities_text:
-                    message += f"\n- Internal Amenities:{amenities_text}"
-
-                # TODO: also return the raw node dict? (originally part of ToolResult.data)
-                return ensure_english_message(message)
+                return {
+                    "building_id": building_id,
+                    "name": node['name'],
+                    "type": node.get('type', 'Unknown'),
+                    "zone": node.get('zone', 'Unknown'),
+                    "aliases": node.get('aliases', []),
+                    "internal_amenities": node.get('internal_amenities', {}),
+                }
 
         raise ValueError(f"Building with ID '{building_id}' not found.")
 
-    def find_room_location(self, room_query: str, building_id: Optional[str] = None, zone: Optional[str] = None) -> str:
+    def find_room_location(self, room_query: str, building_id: Optional[str] = None, zone: Optional[str] = None) -> List[Dict[str, str]]:
         """
         Find room location within campus or specified area
 
@@ -171,16 +165,17 @@ class MapLookupSystem:
             zone: Optional zone to limit search
 
         Returns:
-            Human-readable room location information
+            List of dicts with building_id, building_name, floor, and room_name.
+            Returns an empty list if no matches are found.
 
         Raises:
-            ValueError: If room_query is missing or no rooms found
+            ValueError: If room_query is missing
         """
         if not room_query:
             raise ValueError("Room query is required.")
 
         room_query_lower = room_query.lower()
-        found_rooms = []
+        found_rooms: List[Dict[str, str]] = []
 
         for node in self._map_data["nodes"]:
             # Apply filters
@@ -200,19 +195,7 @@ class MapLookupSystem:
                             "room_name": item
                         })
 
-        if not found_rooms:
-            raise ValueError(f"No rooms found matching '{room_query}'.")
-
-        if len(found_rooms) == 1:
-            room = found_rooms[0]
-            message = f"Found room '{room['room_name']}' on {room['floor']} of {room['building_name']} (ID: {room['building_id']})."
-        else:
-            message = f"Found {len(found_rooms)} rooms matching '{room_query}':"
-            for room in found_rooms:
-                message += f"\n- {room['room_name']} on {room['floor']} of {room['building_name']} (ID: {room['building_id']})"
-
-        # TODO: also return structured {"rooms": found_rooms}? (originally part of ToolResult.data)
-        return ensure_english_message(message)
+        return found_rooms
 
     def find_optimal_path(self, source_building_id: str, target_building_id: str, constraints: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
@@ -345,7 +328,7 @@ class MapLookupSystem:
 
         return {"error": f"No path could be found from {source_id} to {target_id}."}
 
-    def query_buildings_by_property(self, zone: Optional[str] = None, building_type: Optional[str] = None, amenity: Optional[str] = None) -> str:
+    def query_buildings_by_property(self, zone: Optional[str] = None, building_type: Optional[str] = None, amenity: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Query buildings by properties
 
@@ -355,12 +338,12 @@ class MapLookupSystem:
             amenity: Amenity to filter by
 
         Returns:
-            Human-readable list of matching buildings
+            List of dicts with building_id, name, type, and zone
 
         Raises:
             ValueError: If no buildings match the criteria
         """
-        matching_buildings = []
+        matching_buildings: List[Dict[str, Any]] = []
 
         for node in self._map_data["nodes"]:
             # Apply filters
@@ -379,7 +362,7 @@ class MapLookupSystem:
                     continue
 
             matching_buildings.append({
-                "id": node["id"],
+                "building_id": node["id"],
                 "name": node["name"],
                 "type": node.get("type"),
                 "zone": node.get("zone")
@@ -388,14 +371,9 @@ class MapLookupSystem:
         if not matching_buildings:
             raise ValueError("No buildings found matching the specified criteria.")
 
-        message = f"Found {len(matching_buildings)} building(s) matching criteria:"
-        for building in matching_buildings:
-            message += f"\n- {building['name']} (ID: {building['id']}, Type: {building['type']}, Zone: {building['zone']})"
+        return matching_buildings
 
-        # TODO: also return structured {"buildings": matching_buildings}? (originally part of ToolResult.data)
-        return ensure_english_message(message)
-
-    def get_building_complex_info(self, building_id: str) -> str:
+    def get_building_complex_info(self, building_id: str) -> Dict[str, Any]:
         """
         Get building complex information
 
@@ -403,7 +381,7 @@ class MapLookupSystem:
             building_id: Building ID to check for complex membership
 
         Returns:
-            Human-readable complex information
+            Dict with is_complex_member, complex_name, and member_ids
 
         Raises:
             ValueError: If building_id is missing
@@ -426,38 +404,40 @@ class MapLookupSystem:
 
         for complex_group in self._map_data.get("building_complexes", []):
             if building_id in complex_group.get("member_ids", []):
-                message = f"Building {building_id} is part of the '{complex_group.get('name', 'Unnamed')}' complex."
-                message += f" Complex members: {', '.join(complex_group['member_ids'])}."
-                # TODO: also return the raw complex_group dict? (originally part of ToolResult.data)
-                return ensure_english_message(message)
+                return {
+                    "is_complex_member": True,
+                    "complex_name": complex_group.get('name', 'Unnamed'),
+                    "member_ids": complex_group['member_ids'],
+                }
 
-        # TODO: also return {"is_complex_member": False}? (originally part of ToolResult.data)
-        return f"Building {building_id} is not part of any building complex."
+        return {"is_complex_member": False, "complex_name": None, "member_ids": []}
 
-    def list_valid_query_properties(self) -> str:
+    def list_valid_query_properties(self) -> Dict[str, List[str]]:
         """
         List all valid query properties
 
         Returns:
-            Human-readable list of available properties
+            Dict with zones, building_types, and amenities lists
         """
         # Extract unique properties from map data
-        zones = set()
-        types = set()
+        zones: set[str] = set()
+        types: set[str] = set()
+        amenities: set[str] = set()
 
         for node in self._map_data["nodes"]:
             if "zone" in node:
                 zones.add(node["zone"])
             if "type" in node:
                 types.add(node["type"])
+            for floor, items in node.get("internal_amenities", {}).items():
+                for item in items:
+                    amenities.add(item)
 
-        message = "Available query properties:"
-        message += f"\n- Zones: {', '.join(sorted(zones))}"
-        message += f"\n- Building Types: {', '.join(sorted(types))}"
-
-        # TODO: also return structured {"zones": sorted(zones), "building_types": sorted(types)}?
-        # (originally part of ToolResult.data)
-        return ensure_english_message(message)
+        return {
+            "zones": sorted(zones),
+            "building_types": sorted(types),
+            "amenities": sorted(amenities),
+        }
 
 
 class GeographySystem:
@@ -514,7 +494,7 @@ class GeographySystem:
         message = f"You are now located at {building_name}."
         return ensure_english_message(message)
 
-    def walk_to(self, path_info: Dict[str, Any]) -> str:
+    def walk_to(self, path_info: Dict[str, Any]) -> Dict[str, str]:
         """
         Walk to a location using path information from find_optimal_path
 
@@ -522,7 +502,7 @@ class GeographySystem:
             path_info: Path information dictionary with 'path' key
 
         Returns:
-            Human-readable movement success message
+            Dict with name and id of the destination
 
         Raises:
             ValueError: On invalid path or location mismatch
@@ -564,22 +544,16 @@ class GeographySystem:
         self._state.current_location_name = destination_name
         self._state.walk_history.append(path)
 
-        message = f"Successfully walked to {destination_name}. You are now at {destination_name}."
-        # TODO: also return structured {"new_location_id": destination_id, "new_location_name": destination_name, "path_taken": path}?
-        # (originally part of ToolResult.data)
-        return ensure_english_message(message)
+        return {"name": destination_name, "id": destination_id}
 
-    def get_current_location(self) -> str:
+    def get_current_location(self) -> dict:
         """
         Get current location information
 
         Returns:
-            Human-readable current location details
+            Dict with "name" and "id" of the current location.
         """
-        message = f"You are currently at {self._state.current_location_name} (ID: {self._state.current_location_id})."
-        # TODO: also return structured {"building_id": self._state.current_location_id, "building_name": self._state.current_location_name}?
-        # (originally part of ToolResult.data)
-        return ensure_english_message(message)
+        return {"name": self._state.current_location_name, "id": self._state.current_location_id}
 
     def get_state_for_evaluation(self) -> GeographyState:
         """

@@ -137,8 +137,7 @@ class CampusEnvironment:
         Returns:
             Current building ID
         """
-        # TODO: Get get_current_location() to return structured data so that we don't have to access private _state
-        return self.geography_system._state.current_location_id
+        return self.geography_system.get_current_location()["id"]
 
     def apply_world_state_changes(self, changes: List[Dict[str, Any]]) -> None:
         """
@@ -449,49 +448,153 @@ class CampusEnvironment:
     def raw_find_building_id(self, building_name: str) -> Dict[str, str]:
         """Find a building's unique ID by its name or alias.
 
+        Example — resolve a list of building names to IDs::
+
+            names = ["Elmwood Apartments", "Carson Center", "Fashion Institute", "Campus Transit Hub"]
+            ids = [campus.find_building_id(n)["id"] for n in names]
+
+        Use the returned ``"id"`` as ``building_id`` for
+        ``find_optimal_path()``, ``query_availability()``,
+        and ``make_booking()``.
+
         Args:
             building_name: Name or alias of the building (e.g. "Grand Central Library").
 
         Returns:
             Dict with "name" and "id" keys.
         """
-        # DIFF from original: returns Dict instead of str so the agent can do
-        # ``bid = campus.find_building_id("...")["id"]`` without parsing.
         return self.map_lookup_system.find_building_id(building_name)
 
-    def raw_get_building_details(self, building_id: str) -> str:
+    def raw_get_building_details(self, building_id: str) -> Dict[str, Any]:
         """Get all details for a building (name, zone, type, amenities, rooms).
 
         Args:
             building_id: Building ID (e.g. "B001").
 
         Returns:
-            Human-readable result string.
+            Dict with building_id, name, type, zone, aliases, and
+            internal_amenities (dict mapping floor names to lists of
+            amenity names). The amenity names are the valid ``item_name``
+            values for ``make_booking()``.
         """
         return self.map_lookup_system.get_building_details(building_id)
 
-    def raw_find_room_location(self, room_query: str, building_id: Optional[str] = None, zone: Optional[str] = None) -> str:
-        """Find the location of a specific room by name or number.
+    # Subject-area → library building mapping.  The campus has 14 libraries;
+    # this maps academic disciplines to the building that holds the relevant
+    # collection.  Used by raw_find_library.
+    _SUBJECT_TO_LIBRARY: Dict[str, tuple[str, str]] = {
+        # STEM Library (B042)
+        "engineering": ("B042", "STEM Library"),
+        "computer science": ("B042", "STEM Library"),
+        "computer": ("B042", "STEM Library"),
+        "software": ("B042", "STEM Library"),
+        "data structures": ("B042", "STEM Library"),
+        "algorithms": ("B042", "STEM Library"),
+        "mathematics": ("B042", "STEM Library"),
+        "math": ("B042", "STEM Library"),
+        "physics": ("B042", "STEM Library"),
+        "chemistry": ("B042", "STEM Library"),
+        "biology": ("B042", "STEM Library"),
+        "pharmacy": ("B042", "STEM Library"),
+        "neuroscience": ("B042", "STEM Library"),
+        "robotics": ("B042", "STEM Library"),
+        "ai": ("B042", "STEM Library"),
+        "science": ("B042", "STEM Library"),
+        "geoscience": ("B042", "STEM Library"),
+        # Grand Central Library (B001) — humanities, social sciences, general
+        "psychology": ("B001", "Grand Central Library"),
+        "sociology": ("B001", "Grand Central Library"),
+        "economics": ("B001", "Grand Central Library"),
+        "philosophy": ("B001", "Grand Central Library"),
+        "history": ("B001", "Grand Central Library"),
+        "literature": ("B001", "Grand Central Library"),
+        "humanities": ("B001", "Grand Central Library"),
+        "social science": ("B001", "Grand Central Library"),
+        "political science": ("B001", "Grand Central Library"),
+        "politics": ("B001", "Grand Central Library"),
+        "culture": ("B001", "Grand Central Library"),
+        "language": ("B001", "Grand Central Library"),
+        "reading": ("B001", "Grand Central Library"),
+        # Blackstone School of Law (B007)
+        "law": ("B007", "Blackstone School of Law"),
+        "legal": ("B007", "Blackstone School of Law"),
+        # Dewey School of Education (B015)
+        "education": ("B015", "Dewey School of Education"),
+        "teaching": ("B015", "Dewey School of Education"),
+        # Harmony School of Music (B056)
+        "music": ("B056", "Harmony School of Music"),
+        # Gombrich Hall (B070) — art history
+        "art": ("B070", "Gombrich Hall"),
+        "art history": ("B070", "Gombrich Hall"),
+        # The University Archive (B021)
+        "archive": ("B021", "The University Archive"),
+        # Interfaith Chapel & Studies Center (B023)
+        "religion": ("B023", "Interfaith Chapel & Studies Center"),
+        "theology": ("B023", "Interfaith Chapel & Studies Center"),
+        # Acropolis Pavilion (B019)
+        "archaeology": ("B019", "Acropolis Pavilion"),
+        "classics": ("B019", "Acropolis Pavilion"),
+        # Heritage Hall (B005)
+        "heritage": ("B005", "Heritage Hall"),
+        # Agora Hall (B006)
+        "debate": ("B006", "Agora Hall"),
+        # Locke Center (B011)
+        "political": ("B011", "Locke Center"),
+        # Orwell Hall (B014)
+        "writing": ("B014", "Orwell Hall"),
+        "journalism": ("B014", "Orwell Hall"),
+        # The University Bookstore (B147)
+        "bookstore": ("B147", "The University Bookstore"),
+    }
+
+    def raw_find_library(self, subject: str) -> Dict[str, str]:
+        """Find the library building for a given academic subject.
+
+        Use this to discover which building to book a seat at::
+
+            # "I need to study engineering" → find the library
+            lib = campus.find_library("engineering")
+            # -> {"id": "B042", "name": "STEM Library"}
 
         Args:
-            room_query: Name or number of the room (e.g. "Seminar Room 101").
-            building_id: Optional building ID to narrow the search.
-            zone: Optional zone name to narrow the search.
+            subject: Academic subject or discipline (e.g. "engineering",
+                "psychology", "music", "law", "economics", "computer science").
 
         Returns:
-            Human-readable result string.
+            Dict with "id" and "name" of the library building.
+
+        Raises:
+            ValueError: If the subject doesn't match any known library.
         """
-        return self.map_lookup_system.find_room_location(room_query, building_id, zone)
+        key = subject.strip().lower()
+        # Try exact match first, then substring
+        if key in self._SUBJECT_TO_LIBRARY:
+            bid, name = self._SUBJECT_TO_LIBRARY[key]
+            return {"id": bid, "name": name}
+        for k, (bid, name) in self._SUBJECT_TO_LIBRARY.items():
+            if k in key or key in k:
+                return {"id": bid, "name": name}
+        raise ValueError(
+            f"No library found for subject {subject!r}. "
+            f"Try a broad discipline like: engineering, psychology, music, law, economics, literature, science."
+        )
 
     def raw_find_optimal_path(self, source_building_id: str, target_building_id: str, constraints: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Find the best path between two buildings.
 
-        Returns a dict that can be passed directly to walk_to(), e.g.::
-
-            path = campus.find_optimal_path("B010", "B127")
-            campus.walk_to(path)
-
         Use find_building_id to resolve building names to IDs if needed.
+
+        Example — when visiting multiple stops, batch all legs in a for loop::
+
+            ids = ["B104", "B055", "B143", "B071", "B148"]  # start, waypoints, destination
+            for i in range(len(ids) - 1):
+                path = campus.find_optimal_path(ids[i], ids[i + 1])
+                campus.walk_to(path)
+
+        Example with constraints::
+
+            path = campus.find_optimal_path("B010", "B127",
+                constraints={"path_type": "Indoor", "rain_exposure": "Covered"})
 
         Args:
             source_building_id: Starting building ID.
@@ -512,19 +615,9 @@ class CampusEnvironment:
             Dict with "path" (list of building IDs) and "path_names" (list of building names).
             Pass this directly to walk_to().
         """
-        # DIFF from original: returns Dict instead of str.
-        # Original: returned a human-readable string
-        # ``f"Optimal path found: {' -> '.join(result['path_names'])}."``
-        # which discarded the structured path data (building IDs).
-        # Issue: the agent needs the building ID list to pass to walk_to(), but had
-        # to parse it from a human-readable string, often getting it wrong (e.g.
-        # passing just waypoint IDs instead of the full path with intermediates).
-        # Fix: return the raw dict so the agent can do
-        # ``path = campus.find_optimal_path(...); campus.walk_to(path)``.
-
         return self.map_lookup_system.find_optimal_path(source_building_id, target_building_id, constraints)
 
-    def raw_query_buildings_by_property(self, zone: Optional[str] = None, building_type: Optional[str] = None, amenity: Optional[str] = None) -> str:
+    def raw_query_buildings_by_property(self, zone: Optional[str] = None, building_type: Optional[str] = None, amenity: Optional[str] = None) -> List[Dict[str, Any]]:
         """Query buildings based on properties. At least one filter is required.
 
         Args:
@@ -533,26 +626,26 @@ class CampusEnvironment:
             amenity: Amenity to filter by (e.g. "Coffee Shop").
 
         Returns:
-            Human-readable result string.
+            List of dicts with building_id, name, type, and zone.
         """
         return self.map_lookup_system.query_buildings_by_property(zone, building_type, amenity)
 
-    def raw_get_building_complex_info(self, building_id: str) -> str:
+    def raw_get_building_complex_info(self, building_id: str) -> Dict[str, Any]:
         """Get complex/cluster membership info for a building.
 
         Args:
             building_id: Building ID to look up.
 
         Returns:
-            Human-readable result string.
+            Dict with is_complex_member, complex_name, and member_ids.
         """
         return self.map_lookup_system.get_building_complex_info(building_id)
 
-    def raw_list_valid_query_properties(self) -> str:
+    def raw_list_valid_query_properties(self) -> Dict[str, List[str]]:
         """List all valid values for zone, building_type, and amenity filters.
 
         Returns:
-            Human-readable result string.
+            Dict with zones, building_types, and amenities lists.
         """
         return self.map_lookup_system.list_valid_query_properties()
 
@@ -560,10 +653,12 @@ class CampusEnvironment:
     def raw_walk_to(self, path_info: Dict[str, Any]) -> Dict[str, str]:
         """Move to a location by following a path of building IDs.
 
-        Typical usage: call find_optimal_path to get the route, then pass it::
+        Example — when visiting multiple stops, batch all legs in a for loop::
 
-            path = campus.find_optimal_path("B083", "B001")
-            campus.walk_to(path)
+            ids = ["B104", "B055", "B143", "B071", "B148"]  # start, waypoints, destination
+            for i in range(len(ids) - 1):
+                path = campus.find_optimal_path(ids[i], ids[i + 1])
+                campus.walk_to(path)
 
         Args:
             path_info: Dict with a "path" key containing an ordered list of building IDs
@@ -572,28 +667,22 @@ class CampusEnvironment:
         Returns:
             Dict with "name" and "id" of the new location.
         """
-        # DIFF from original: returns Dict instead of str.
-        # Original: returned ``"Successfully walked to X. You are now at X."``
-        # Issue: agent needs the new location ID for subsequent operations.
-        # Fix: return {"name": ..., "id": ...} of the new location.
-
-        self.geography_system.walk_to(path_info)
-        state = self.geography_system._state
-        return {"name": state.current_location_name, "id": state.current_location_id}
+        return self.geography_system.walk_to(path_info)
 
     def raw_get_current_location(self) -> Dict[str, str]:
         """Get your current building location.
 
+        Example — walk from current location to a destination::
+
+            cur = campus.get_current_location()
+            dest = campus.find_building_id("STEM Library")
+            path = campus.find_optimal_path(cur["id"], dest["id"])
+            campus.walk_to(path)
+
         Returns:
             Dict with "name" and "id" keys.
         """
-        # DIFF from original: returns Dict instead of str.
-        # Original: returned ``"You are currently at X (ID: B001)."``
-        # Issue: the agent needs the ID to pass to find_optimal_path, etc.
-        # Fix: return {"name": ..., "id": ...}.
-
-        state = self.geography_system._state
-        return {"name": state.current_location_name, "id": state.current_location_id}
+        return self.geography_system.get_current_location()
 
     # Reservation
     def raw_query_availability(self, location_id: str, date: str) -> str:
