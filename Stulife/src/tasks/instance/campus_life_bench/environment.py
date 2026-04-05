@@ -937,7 +937,7 @@ class CampusEnvironment:
         return self.course_selection_system.submit_draft()
 
     # Email
-    def raw_send_email(self, recipient: str, subject: str, body: str) -> str:
+    def raw_send_email(self, recipient: str, subject: str, body: str) -> None:
         """Send an email.
 
         Args:
@@ -946,6 +946,6 @@ class CampusEnvironment:
             body: Email body content.
 
         Returns:
-            Human-readable result string.
+            None. Raises ValueError on failure.
         """
         return self.email_system.send_email(recipient, subject, body)

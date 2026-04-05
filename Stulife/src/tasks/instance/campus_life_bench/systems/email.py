@@ -3,10 +3,9 @@ Email System for CampusLifeBench
 All natural language communications/returns MUST use English only
 """
 
+import re
 from typing import List
 from dataclasses import dataclass
-
-from ..tools import ensure_english_message
 
 
 @dataclass
@@ -28,7 +27,7 @@ class EmailSystem:
         # Global persistent email log
         self._sent_emails_log: List[SentEmail] = []
 
-    def send_email(self, recipient: str, subject: str, body: str) -> str:
+    def send_email(self, recipient: str, subject: str, body: str) -> None:
         """
         Send an email to the specified recipient
 
@@ -38,7 +37,7 @@ class EmailSystem:
             body: Email body content
 
         Returns:
-            Human-readable success message
+            None. Raises ValueError on failure.
 
         Raises:
             ValueError: On invalid input
@@ -53,9 +52,13 @@ class EmailSystem:
         if not body or not isinstance(body, str):
             raise ValueError("Email body is required and must be a non-empty string.")
 
-        # Basic email format validation
-        if "@" not in recipient or "." not in recipient:
-            raise ValueError("Invalid email address format.")
+        # Email format validation: local@domain.tld
+        # https://colinhacks.com/essays/reasonable-email-regex
+        if not re.match(r'^[a-zA-Z0-9][a-zA-Z0-9._+-]*[a-zA-Z0-9]@[a-zA-Z0-9][a-zA-Z0-9.-]*[a-zA-Z0-9]\.[a-zA-Z]{2,}$', recipient):
+            raise ValueError(
+                f"Invalid email address format '{recipient}'. "
+                f"Expected format: local@domain.tld (e.g. 'user@lau.edu')."
+            )
 
         # Create email record
         email = SentEmail(
@@ -67,10 +70,7 @@ class EmailSystem:
         # Add to persistent log
         self._sent_emails_log.append(email)
 
-        message = f"Email has been successfully sent to {recipient}."
-        # TODO: also return structured {"recipient": email.recipient, "subject": email.subject, "email_count": len(self._sent_emails_log)}?
-        # (originally part of ToolResult.data)
-        return ensure_english_message(message)
+        return None
 
     def get_sent_emails_for_evaluation(self) -> List[SentEmail]:
         """
