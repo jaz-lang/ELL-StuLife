@@ -1,13 +1,10 @@
 """
 Bibliography and Information Query System for CampusLifeBench
-All natural language communications/returns MUST use English only
 """
 
 import json
 from typing import Dict, List, Any, Optional
 from pathlib import Path
-
-from ..tools import ensure_english_message
 
 
 class InformationSystem:
@@ -244,7 +241,7 @@ class InformationSystem:
 
     # ========== Data System Query Tools ==========
 
-    def list_by_category(self, category: str, entity_type: str, level: Optional[str] = None) -> str:
+    def list_by_category(self, category: str, entity_type: str, level: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         List entities by category
 
@@ -254,7 +251,7 @@ class InformationSystem:
             level: For advisors only - "level_1" or "level_2"
 
         Returns:
-            Human-readable list of matching entities
+            List of matching entity dicts (clubs or advisors)
 
         Raises:
             ValueError: If inputs are missing or invalid
@@ -265,75 +262,35 @@ class InformationSystem:
         if entity_type not in ["club", "advisor"]:
             raise ValueError("Entity type must be either 'club' or 'advisor'.")
 
-        results = []
+        results: List[Dict[str, Any]] = []
 
         if entity_type == "club":
             for club in self._data_system_data["clubs"]:
                 if club["category"].lower() == category.lower():
-                    results.append(club["club_name"])
+                    results.append(dict(club))
 
-            if results:
-                message = f"Clubs in category '{category}': {', '.join(results)}."
-            else:
-                message = f"No clubs found in category '{category}'."
-
-            # TODO: also return structured {"clubs": results}? (originally part of ToolResult.data)
-            return message
+            return results
 
         elif entity_type == "advisor":
             for advisor in self._data_system_data["advisors"]:
                 research_area = advisor.get("research_area", {})
 
                 if level == "level_1" and research_area.get("level_1", "").lower() == category.lower():
-                    results.append({
-                        "name": advisor["name"],
-                        "research_area": research_area,
-                        "representative_work": advisor.get("representative_work", [])
-                    })
+                    results.append(dict(advisor))
                 elif level == "level_2" and research_area.get("level_2", "").lower() == category.lower():
-                    results.append({
-                        "name": advisor["name"],
-                        "research_area": research_area,
-                        "representative_work": advisor.get("representative_work", [])
-                    })
+                    results.append(dict(advisor))
                 elif level is None:
                     # Search in both levels and tags
                     if (category.lower() in research_area.get("level_1", "").lower() or
                             category.lower() in research_area.get("level_2", "").lower() or
                             any(category.lower() in tag.lower() for tag in research_area.get("tags", []))):
-                        results.append({
-                            "name": advisor["name"],
-                            "research_area": research_area,
-                            "representative_work": advisor.get("representative_work", [])
-                        })
+                        results.append(dict(advisor))
 
-            if results:
-                message = f"Found {len(results)} advisor(s) in category '{category}':"
-                for advisor in results:
-                    message += f"\n- Name: {advisor['name']}"
+            return results
 
-                    # Format research area
-                    research_area = advisor.get('research_area', {})
-                    level1 = research_area.get('level_1', 'N/A')
-                    level2 = research_area.get('level_2', 'N/A')
-                    message += f"\n  Research Area: {level1} -> {level2}"
+        return results
 
-                    tags = research_area.get('tags', [])
-                    if tags:
-                        message += f"\n  Tags: {', '.join(tags)}"
-
-                    # Format representative work
-                    rep_work = advisor.get('representative_work', [])
-                    if rep_work:
-                        work_items = '\n    - '.join(rep_work)
-                        message += f"\n  Representative Work:\n    - {work_items}"
-            else:
-                message = f"No advisors found in category '{category}'."
-
-            # TODO: also return structured {"advisors": results}? (originally part of ToolResult.data)
-            return message
-
-    def query_by_identifier(self, identifier: str, by: str, entity_type: str) -> str:
+    def query_by_identifier(self, identifier: str, by: str, entity_type: str) -> Dict[str, Any]:
         """
         Query entity by identifier (name or ID)
 
@@ -353,7 +310,7 @@ class InformationSystem:
             >>> query_by_identifier(identifier="Dr. John Smith", by="name", entity_type="advisor")
 
         Returns:
-            Human-readable entity details
+            The entity dict directly
 
         Raises:
             ValueError: If inputs are missing/invalid or entity not found
@@ -371,16 +328,7 @@ class InformationSystem:
             for club in self._data_system_data["clubs"]:
                 if ((by == "name" and club["club_name"].lower() == identifier.lower()) or
                         (by == "id" and club["club_id"] == identifier)):
-
-                    message = f"Club Details:\n"
-                    message += f"Name: {club['club_name']}\n"
-                    message += f"ID: {club['club_id']}\n"
-                    message += f"Category: {club['category']}\n"
-                    message += f"Description: {club['description']}\n"
-                    message += f"Recruitment Info: {club['recruitment_info']}"
-
-                    # TODO: also return the raw club dict? (originally part of ToolResult.data)
-                    return message
+                    return dict(club)
 
             raise ValueError(f"Club with {by} '{identifier}' not found.")
 
@@ -388,16 +336,7 @@ class InformationSystem:
             for advisor in self._data_system_data["advisors"]:
                 if ((by == "name" and advisor["name"].lower() == identifier.lower()) or
                         (by == "id" and advisor["advisor_id"] == identifier)):
-
-                    message = f"Advisor Details:\n"
-                    message += f"Name: {advisor['name']}\n"
-                    message += f"ID: {advisor['advisor_id']}\n"
-                    message += f"Email: {advisor['email']}\n"
-                    message += f"Research Area: {advisor['research_area']['level_2']}\n"
-                    message += f"Representative Work: {', '.join(advisor['representative_work'])}"
-
-                    # TODO: also return the raw advisor dict? (originally part of ToolResult.data)
-                    return message
+                    return dict(advisor)
 
             raise ValueError(f"Advisor with {by} '{identifier}' not found.")
 

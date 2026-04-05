@@ -772,8 +772,22 @@ class CampusEnvironment:
         """
         return self.information_system.view_article(identifier, by)
 
-    def raw_list_by_category(self, category: str, entity_type: str, level: Optional[str] = None) -> str:
+    def raw_list_by_category(self, category: str, entity_type: str, level: Optional[str] = None) -> List[Dict[str, Any]]:
         """List clubs or advisors by category.
+
+        Example — find a club by category::
+
+            clubs = campus.list_by_category("Sports & Fitness", "club")
+            for c in clubs:
+                if "Rock Climbing" in c["club_name"]:
+                    print(c["club_id"], c["recruitment_info"])
+
+        Example — find an advisor and send email::
+
+            advisors = campus.list_by_category("Engineering", "advisor", level="level_2")
+            for a in advisors:
+                if "Raymond" in a["name"]:
+                    campus.send_email(a["email"], "Subject", "Body")
 
         Args:
             category: Category to filter by.
@@ -786,25 +800,39 @@ class CampusEnvironment:
             entity_type: "club" or "advisor".
             level: For advisors only — "level_1" or "level_2" to restrict which research
                 area level is searched. Omit to search all levels and tags.
+                Use this to narrow results for large categories (e.g. "Engineering"
+                has 400+ advisors). "level_2" searches sub-specializations.
 
-        Campus data available: 101 student clubs, 1000 faculty advisors,
-            395 library books.
+        Campus data available: 101 student clubs, 1000 faculty advisors.
 
         Returns:
-            Human-readable result string.
+            List of entity dicts. For clubs: club_id, club_name, category,
+            recruitment_info. For advisors: advisor_id, name, email,
+            research_area, tags, etc. Use advisor ``email`` as ``recipient``
+            for ``send_email()``.
         """
         return self.information_system.list_by_category(category, entity_type, level)
 
-    def raw_query_by_identifier(self, identifier: str, by: str, entity_type: str) -> str:
+    def raw_query_by_identifier(self, identifier: str, by: str, entity_type: str) -> Dict[str, Any]:
         """Get all details for a specific club or advisor by name or ID.
 
+        Example — find an advisor's email to send a message::
+
+            adv = campus.query_by_identifier("Raymond Clark", "name", "advisor")
+            campus.send_email(adv["email"], "Consultation Request", "...")
+
         Args:
-            identifier: Name or ID of the club/advisor.
+            identifier: Name or ID of the club/advisor (e.g. "Rock Climbing
+                Adventure Club" or "club_c062" for clubs; "Raymond Clark" or
+                "T0485" for advisors).
             by: "name" or "id".
             entity_type: "club" or "advisor".
 
         Returns:
-            Human-readable result string.
+            The full entity dict. For clubs: club_id, club_name, category,
+            recruitment_info. For advisors: advisor_id, name, email,
+            research_area, tags, etc. Use advisor ``email`` as ``recipient``
+            for ``send_email()``.
         """
         return self.information_system.query_by_identifier(identifier, by, entity_type)
 
