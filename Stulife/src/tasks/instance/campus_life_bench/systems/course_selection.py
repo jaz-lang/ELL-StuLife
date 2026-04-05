@@ -8,8 +8,6 @@ from typing import Dict, List, Any, Optional
 from pathlib import Path
 from dataclasses import dataclass
 
-from ..tools import ensure_english_message
-
 
 @dataclass
 class DraftScheduleEntry:
@@ -207,7 +205,7 @@ class CourseSelectionSystem:
 
         return courses
 
-    def add_course(self, section_id: str) -> str:
+    def add_course(self, section_id: str) -> None:
         """
         Add a course to draft schedule
 
@@ -215,7 +213,7 @@ class CourseSelectionSystem:
             section_id: Course section ID to add
 
         Returns:
-            Human-readable success message
+            None. Raises ValueError on failure.
 
         Raises:
             ValueError: If section_id is missing, course doesn't exist, or already in draft
@@ -246,12 +244,9 @@ class CourseSelectionSystem:
         entry = DraftScheduleEntry(course_code=section_id)
         self._draft_schedule.selected_sections.append(entry)
 
-        message = f"Course '{section_id}' has been successfully added to your draft schedule."
-        # TODO: also return structured {"course_code": section_id, "draft_count": len(self._draft_schedule.selected_sections)}?
-        # (originally part of ToolResult.data)
-        return ensure_english_message(message)
+        return None
 
-    def remove_course(self, section_id: str) -> str:
+    def remove_course(self, section_id: str) -> None:
         """
         Remove a course from draft schedule
 
@@ -259,7 +254,7 @@ class CourseSelectionSystem:
             section_id: Course section ID to remove
 
         Returns:
-            Human-readable success message
+            None. Raises ValueError on failure.
 
         Raises:
             ValueError: If section_id is missing or course not in draft
@@ -271,10 +266,7 @@ class CourseSelectionSystem:
         for i, entry in enumerate(self._draft_schedule.selected_sections):
             if entry.course_code == section_id:
                 self._draft_schedule.selected_sections.pop(i)
-                message = f"Course '{section_id}' has been successfully removed from your draft schedule."
-                # TODO: also return structured {"course_code": section_id, "draft_count": len(self._draft_schedule.selected_sections)}?
-                # (originally part of ToolResult.data)
-                return ensure_english_message(message)
+                return None
 
         base_code = section_id.split("(")[0]
         for entry in self._draft_schedule.selected_sections:
@@ -285,7 +277,7 @@ class CourseSelectionSystem:
                 )
         raise ValueError(f"Course section '{section_id}' is not in your draft schedule.")
 
-    def assign_pass(self, section_id: str, pass_type: str) -> str:
+    def assign_pass(self, section_id: str, pass_type: str) -> None:
         """
         Assign a pass type to a course in draft schedule
 
@@ -294,7 +286,7 @@ class CourseSelectionSystem:
             pass_type: Pass type ("S-Pass", "A-Pass", or "B-Pass")
 
         Returns:
-            Human-readable success message
+            None. Raises ValueError on failure.
 
         Raises:
             ValueError: If inputs are missing/invalid or course not in draft
@@ -309,10 +301,7 @@ class CourseSelectionSystem:
         for entry in self._draft_schedule.selected_sections:
             if entry.course_code == section_id:
                 entry.assigned_pass = pass_type
-                message = f"Pass type '{pass_type}' has been successfully assigned to course '{section_id}'."
-                # TODO: also return structured {"course_code": section_id, "assigned_pass": pass_type}?
-                # (originally part of ToolResult.data)
-                return ensure_english_message(message)
+                return None
 
         # Check if a different section of the same course is in the draft.
         # Section IDs share a base code, e.g. "COMS0031131032" and "COMS0031131032(2)".
@@ -325,47 +314,26 @@ class CourseSelectionSystem:
                 )
         raise ValueError(f"Course section '{section_id}' is not in your draft schedule.")
 
-    def view_draft(self) -> str:
+    def view_draft(self) -> List[Dict[str, Any]]:
         """
         View current draft schedule
 
         Returns:
-            Human-readable draft schedule information
+            List of dicts, each with section_id and assigned_pass keys.
+            Empty list if no courses in draft.
         """
-        if not self._draft_schedule.selected_sections:
-            message = "Your draft schedule is empty."
-            return ensure_english_message(message)
+        return [
+            {"section_id": entry.course_code, "assigned_pass": entry.assigned_pass}
+            for entry in self._draft_schedule.selected_sections
+        ]
 
-        message = "Your current draft schedule:"
-        courses_info = []
-
-        for entry in self._draft_schedule.selected_sections:
-            # Get course name
-            course_name = "Unknown Course"
-            for course in self._courses_data.get("courses", []):
-                if course["course_code"] == entry.course_code:
-                    course_name = course["course_name"]
-                    break
-
-            pass_info = f" (Pass: {entry.assigned_pass})" if entry.assigned_pass else " (No pass assigned)"
-            message += f"\n- {entry.course_code}: {course_name}{pass_info}"
-
-            courses_info.append({
-                "course_code": entry.course_code,
-                "course_name": course_name,
-                "assigned_pass": entry.assigned_pass,
-            })
-
-        # TODO: also return structured {"courses": courses_info}? (originally part of ToolResult.data)
-        return ensure_english_message(message)
-
-    def submit_draft(self) -> str:
+    def submit_draft(self) -> Dict[str, Any]:
         """
-        Submit draft schedule for final registration
-        Applies deterministic rules based on popularity and pass types
+        Submit draft schedule for final registration.
+        Applies deterministic rules based on popularity and pass types.
 
         Returns:
-            Human-readable registration results
+            Dict with total_courses, successful_registrations, and results list.
 
         Raises:
             ValueError: If draft schedule is empty
@@ -420,15 +388,7 @@ class CourseSelectionSystem:
                     "reason": f"Course too popular for {entry.assigned_pass} (popularity: {popularity})"
                 })
 
-        # Format results message
-        message = f"Registration completed! {success_count}/{len(results)} courses successfully registered:"
-        for result in results:
-            status_icon = "[SUCCESS]" if result["status"] == "Success" else "[FAILED]"
-            message += f"\n{status_icon} {result['course_code']}: {result['status']} - {result['reason']}"
-
-        # TODO: also return {"total_courses": len(results), "successful_registrations": success_count, "results": results}?
-        # (originally part of ToolResult.data)
-        return ensure_english_message(message)
+        return {"total_courses": len(results), "successful_registrations": success_count, "results": results}
 
     def get_draft_schedule_for_evaluation(self) -> DraftSchedule:
         """

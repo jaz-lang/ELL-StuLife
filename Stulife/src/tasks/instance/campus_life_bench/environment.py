@@ -842,6 +842,17 @@ class CampusEnvironment:
     def raw_browse_courses(self, filters: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """Browse available courses with optional filters.
 
+        Example — map course names to draft section_ids::
+
+            names = ["Linear Algebra", "Mental Health", "Military Theory"]
+            draft_ids = {d["section_id"] for d in campus.view_draft()}
+            name_to_id = {}
+            for name in names:
+                for c in campus.browse_courses({"course_name": name}):
+                    if c["section_id"] in draft_ids:
+                        name_to_id[name] = c["section_id"]
+            print(name_to_id)
+
         Course selection rules:
         - Semester 1: select at least 6 compulsory courses, 8 total.
             Compulsory pass budget: 1 S-Pass, 2 A-Passes, unlimited B-Passes.
@@ -875,64 +886,64 @@ class CampusEnvironment:
         """
         return self.course_selection_system.browse_courses(filters)
 
-    def raw_add_course(self, section_id: str) -> str:
+    def raw_add_course(self, section_id: str) -> None:
         """Add a course to your draft schedule.
 
         Args:
             section_id: Section ID of the course to add (e.g. "WXK003111107").
 
         Returns:
-            Human-readable result string.
+            None. Raises ValueError on failure.
         """
         return self.course_selection_system.add_course(section_id)
 
-    def raw_remove_course(self, section_id: str) -> str:
+    def raw_remove_course(self, section_id: str) -> None:
         """Remove a course from your draft schedule.
 
         Args:
             section_id: Section ID of the course to remove.
 
         Returns:
-            Human-readable result string.
+            None. Raises ValueError on failure.
         """
         return self.course_selection_system.remove_course(section_id)
 
-    def raw_assign_pass(self, section_id: str, pass_type: str) -> str:
+    def raw_assign_pass(self, section_id: str, pass_type: str) -> None:
         """Assign a priority pass to a drafted course.
+
+        Example — reassign passes for multiple courses::
+
+            name_to_pass = {"Mental Health": "S-Pass", "Linear Algebra": "A-Pass", ...}
+            name_to_id = { ... }  # built via browse_courses + view_draft
+            for name, pass_type in name_to_pass.items():
+                campus.assign_pass(name_to_id[name], pass_type)
+
+        Use the exact ``section_id`` from ``view_draft()``, not from
+        ``browse_courses()`` — a course may have multiple sections.
 
         Args:
             section_id: Section ID of the course.
             pass_type: "S-Pass", "A-Pass", or "B-Pass".
 
         Returns:
-            Human-readable result string.
+            None. Raises ValueError on failure.
         """
         return self.course_selection_system.assign_pass(section_id, pass_type)
 
-    def raw_view_draft(self) -> list[Dict[str, str]]:
+    def raw_view_draft(self) -> List[Dict[str, Any]]:
         """View your current draft schedule.
 
         Returns:
             List of dicts, each with "section_id" and "assigned_pass" keys.
             Empty list if no courses in draft.
         """
-        # DIFF from original: returns list of dicts instead of str.
-        # Original: returned a formatted string like ``"Your draft: ..."``
-        # Issue: agent needs course codes and pass types to decide what to change,
-        # but had to parse them from a multi-line formatted string.
-        # Fix: return list of {"section_id": ..., "assigned_pass": ...} dicts.
+        return self.course_selection_system.view_draft()
 
-        draft = self.course_selection_system.get_draft_schedule_for_evaluation()
-        return [
-            {"section_id": s.course_code, "assigned_pass": s.assigned_pass}
-            for s in draft.selected_sections
-        ]
-
-    def raw_submit_draft(self) -> str:
+    def raw_submit_draft(self) -> Dict[str, Any]:
         """Submit your draft schedule for final registration.
 
         Returns:
-            Human-readable result string.
+            Dict with total_courses, successful_registrations, and results list.
         """
         return self.course_selection_system.submit_draft()
 
