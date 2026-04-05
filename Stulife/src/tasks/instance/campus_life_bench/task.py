@@ -1100,6 +1100,59 @@ class CampusTask(Task[CampusDatasetItem]):
         except Exception as e:
             return None, f"evaluation error: {e}"
 
+    def _score_walking_simple(self, task_item: CampusDatasetItem) -> tuple[Optional[float], str]:
+        """Score walking task: LCS(agent_path, gt_path) / len(gt_path).
+
+        Returns (score in [0.0, 1.0], reason).  1.0 means exact match.
+        Returns (None, reason) on error.
+        """
+        try:
+            geo_state = self.campus_environment.geography_system.get_state_for_evaluation()
+            expected_path = task_item.ground_truth.get("path_taken")
+
+            if not expected_path:
+                target_location = task_item.ground_truth["expected_outcome"]["target_location_id"]
+                current = geo_state.current_location_id
+                if current == target_location:
+                    return 1.0, f"at correct location {current!r}"
+                return 0.0, f"at {current!r}, expected {target_location!r}"
+
+            # Build agent path from walk_history
+            agent_path: list = []
+            if geo_state.walk_history:
+                agent_path.extend(geo_state.walk_history[0])
+                for segment in geo_state.walk_history[1:]:
+                    if agent_path and segment and agent_path[-1] == segment[0]:
+                        agent_path.extend(segment[1:])
+                    else:
+                        agent_path.extend(segment)
+
+            if agent_path == expected_path:
+                return 1.0, "correct path taken"
+
+            if not agent_path:
+                return 0.0, "no path walked"
+
+            # LCS length via standard DP
+            n, m = len(agent_path), len(expected_path)
+            # Use 1D DP to save memory
+            prev = [0] * (m + 1)
+            for i in range(1, n + 1):
+                cur = [0] * (m + 1)
+                for j in range(1, m + 1):
+                    if agent_path[i - 1] == expected_path[j - 1]:
+                        cur[j] = prev[j - 1] + 1
+                    else:
+                        cur[j] = max(prev[j], cur[j - 1])
+                prev = cur
+            lcs_len = prev[m]
+
+            # LCS / max(len_agent, len_gt) penalizes both missing and extra nodes.
+            score = lcs_len / max(n, m)
+            return score, f"path partial: LCS={lcs_len}, agent={n} nodes, GT={m} nodes, got {agent_path}, expected {expected_path}"
+        except Exception as e:
+            return None, f"evaluation error: {e}"
+
     def _evaluate_walking_simple(self, session: Session, task_item: CampusDatasetItem) -> None:
         """Evaluate simple walking task by strictly checking the path taken."""
         result, _ = self._check_walking_simple(task_item)
@@ -1213,76 +1266,128 @@ class CampusTask(Task[CampusDatasetItem]):
         # Enhance evaluation record with debug information
         self._enhance_evaluation_record(session, task_item)
 
+    # Prefix map used by _check_multi_system to group GT keys by system type.
+    _MULTI_SYSTEM_PREFIX_MAP = {
+        "email_sent": "email",
+        "email": "email",
+        "reservation_made": "reservation",
+        "reservation": "reservation",
+        "calendar_event": "calendar",
+        "calendar": "calendar",
+        "location_reached": "geography",
+        "location": "geography",
+        "course_selected": "course",
+        "course": "course",
+        "walk_to": "walk_to",
+        "walk": "walk_to",
+    }
+
+    def _group_multi_system_criteria(self, ground_truth: dict) -> dict:
+        """Group GT keys by system type, returning {type: [criteria]}."""
+        grouped: dict = collections.defaultdict(list)
+        sorted_prefixes = sorted(self._MULTI_SYSTEM_PREFIX_MAP.keys(), key=len, reverse=True)
+        for key, criteria in ground_truth.items():
+            for prefix in sorted_prefixes:
+                if key.startswith(prefix):
+                    if isinstance(criteria, list):
+                        grouped[self._MULTI_SYSTEM_PREFIX_MAP[prefix]].extend(criteria)
+                    else:
+                        grouped[self._MULTI_SYSTEM_PREFIX_MAP[prefix]].append(criteria)
+                    break
+        return grouped
+
     def _check_multi_system(self, task_item: CampusDatasetItem) -> tuple[Optional[bool], str]:
         """
         Core multi-system evaluation; returns (True/False/None, reason).
         Uses AND logic: ALL components must be correct for a True result.
+        For partial-credit scoring, use _score_multi_system instead.
+        """
+        score, reason = self._score_multi_system(task_item)
+        if score is None:
+            return None, reason
+        return score == 1.0, reason
+
+    def _score_multi_system(self, task_item: CampusDatasetItem) -> tuple[Optional[float], str]:
+        """
+        Score multi-system task with per-criterion granularity.
+        Returns (score in [0.0, 1.0], reason) where score is the fraction
+        of individual GT criteria satisfied.  Returns (None, reason) on error.
         """
         try:
             ground_truth = task_item.ground_truth
             if not isinstance(ground_truth, dict):
                 return None, "ground truth is not a dict"
-            # Group criteria by system type based on key prefixes
-            grouped_criteria: dict = collections.defaultdict(list)
-            # Map ground truth keys (aliases and prefixes) to a canonical system type
-            PREFIX_MAP = {
-                "email_sent": "email",
-                "email": "email",
-                "reservation_made": "reservation",
-                "reservation": "reservation",
-                "calendar_event": "calendar",
-                "calendar": "calendar",
-                "location_reached": "geography",
-                "location": "geography",
-                "course_selected": "course",
-                "course": "course",
-                "walk_to": "walk_to",
-                "walk": "walk_to",
-            }
-            # Sort prefixes by length (desc) to match the most specific prefix first
-            # (e.g., "reservation_made" before "reservation")
-            sorted_prefixes = sorted(PREFIX_MAP.keys(), key=len, reverse=True)
-            for key, criteria in ground_truth.items():
-                for prefix in sorted_prefixes:
-                    if key.startswith(prefix):
-                        if isinstance(criteria, list):
-                            grouped_criteria[PREFIX_MAP[prefix]].extend(criteria)
-                        else:
-                            grouped_criteria[PREFIX_MAP[prefix]].append(criteria)
-                        break
-            # Evaluate each system component that has criteria
-            if "email" in grouped_criteria:
-                ok, reason = self._evaluate_email_component(grouped_criteria["email"])
-                if not ok:
-                    return False, f"email: {reason}"
-            if "reservation" in grouped_criteria:
-                ok, reason = self._evaluate_reservation_component(grouped_criteria["reservation"], task_item.task_id)
-                if not ok:
-                    return False, f"reservation: {reason}"
-            if "calendar" in grouped_criteria:
-                ok, reason = self._evaluate_calendar_component(grouped_criteria["calendar"])
-                if not ok:
-                    return False, f"calendar: {reason}"
-            if "geography" in grouped_criteria:
-                ok, reason = self._evaluate_geography_component(grouped_criteria["geography"])
-                if not ok:
-                    return False, f"geography: {reason}"
-            if "walk_to" in grouped_criteria:
-                ok, reason = self._evaluate_walk_to_component(grouped_criteria["walk_to"])
-                if not ok:
-                    return False, f"walk_to: {reason}"
-            if "course_selection" in grouped_criteria:
-                ok, reason = self._check_course_component(grouped_criteria["course_selection"])
-                if not ok:
-                    return False, f"course_selection: {reason}"
-            # Validate execution sequence for multi-system tasks
-            if task_item.require_sequence:
-                sequence_valid, sequence_message = self._check_execution_sequence(ground_truth)
-                if not sequence_valid:
-                    print(f"Sequence validation failed: {sequence_message}")
-                    return False, f"sequence invalid: {sequence_message}"
-                print(f"Sequence validation passed: {sequence_message}")
-            return True, "all components satisfied"
+
+            grouped = self._group_multi_system_criteria(ground_truth)
+
+            # Count total individual criteria and how many pass.
+            total_criteria = 0
+            passed_criteria = 0
+            fail_reasons: list = []
+
+            total_score = 0.0
+
+            # --- Email: per-criterion, soft score via _score_email_match ---
+            for i, criteria in enumerate(grouped.get("email", [])):
+                total_criteria += 1
+                s, reason = self._score_email_match(criteria)
+                total_score += s
+                if s < 1.0:
+                    fail_reasons.append(f"email[{i}]: {reason}")
+
+            # --- Reservation: per-criterion, soft field-level score ---
+            reservations = self.campus_environment.reservation_system.get_reservations_for_evaluation(task_item.task_id)
+            for i, criteria in enumerate(grouped.get("reservation", [])):
+                total_criteria += 1
+                best = 0.0
+                best_reason = "no reservations made"
+                for res in reservations:
+                    s, reason = self._score_reservation_match(res, criteria)
+                    if s > best:
+                        best, best_reason = s, reason
+                total_score += best
+                if best < 1.0:
+                    fail_reasons.append(f"reservation[{i}]: {best_reason}")
+
+            # --- Calendar: per-criterion, soft field-level score ---
+            for i, criteria in enumerate(grouped.get("calendar", [])):
+                total_criteria += 1
+                cal_id = criteria.get("calendar_id", "self")
+                events = self.campus_environment.calendar_system.get_calendar_events_for_evaluation(cal_id)
+                best = 0.0
+                best_reason = "no calendar events"
+                for ev in events:
+                    s, reason = self._score_calendar_match(ev, criteria)
+                    if s > best:
+                        best, best_reason = s, reason
+                total_score += best
+                if best < 1.0:
+                    fail_reasons.append(f"calendar[{i}]: {best_reason}")
+
+            # --- Geography, walk_to, course: binary per criterion ---
+            binary_evaluators = [
+                ("geography", lambda c: self._evaluate_geography_component(c)),
+                ("walk_to", lambda c: self._evaluate_walk_to_component(c)),
+                ("course", lambda c: self._check_course_component(c)),
+            ]
+            for comp_name, evaluator in binary_evaluators:
+                criteria_list = grouped.get(comp_name)
+                if not criteria_list:
+                    continue
+                for i, single_criterion in enumerate(criteria_list):
+                    total_criteria += 1
+                    ok, reason = evaluator([single_criterion])
+                    total_score += 1.0 if ok else 0.0
+                    if not ok:
+                        fail_reasons.append(f"{comp_name}[{i}]: {reason}")
+
+            if total_criteria == 0:
+                return 1.0, "no criteria to evaluate"
+
+            score = total_score / total_criteria
+            if score == 1.0:
+                return 1.0, "all components satisfied"
+            return score, "; ".join(fail_reasons)
         except Exception as e:
             print(f"Error in multi-system evaluation: {e}")
             return None, f"evaluation error: {e}"
@@ -1344,6 +1449,62 @@ class CampusTask(Task[CampusDatasetItem]):
 
         except Exception as e:
             return False, f"evaluation error: {e}"
+
+    def _score_email_match(self, criteria: dict) -> tuple[float, str]:
+        """Score best-matching sent email against a single criterion.
+
+        Uses edit-distance similarity for body/subject and exact match for
+        recipient.  Returns the average sub-component score across all checked
+        fields, matched against the best email in the sent log.
+        """
+        from difflib import SequenceMatcher
+
+        sent_emails = self.campus_environment.email_system.get_all_emails_for_evaluation()
+        if not sent_emails:
+            return 0.0, "no emails sent"
+
+        def _contains_or_sim(actual: str, expected: str) -> float:
+            """1.0 if normalized expected is a substring of normalized actual,
+            otherwise fall back to SequenceMatcher ratio for partial credit."""
+            na = self._normalize_text_for_comparison(actual)
+            ne = self._normalize_text_for_comparison(expected)
+            if not ne and not na:
+                return 1.0
+            if ne in na:
+                return 1.0
+            return SequenceMatcher(None, na, ne).ratio()
+
+        best_score = 0.0
+        best_reason = "no matching email"
+        for email in sent_emails:
+            email_to = getattr(email, 'to', getattr(email, 'recipient', ""))
+            email_subject = getattr(email, 'subject', "")
+            email_body = getattr(email, 'body', "")
+
+            sub_scores: list[tuple[str, float]] = []
+            if "recipient" in criteria:
+                sub_scores.append(("recipient", 1.0 if email_to == criteria["recipient"] else 0.0))
+            if "subject_contains" in criteria:
+                sub_scores.append(("subject", _contains_or_sim(email_subject, criteria["subject_contains"])))
+            if "body_contains" in criteria:
+                expected_body = criteria["body_contains"]
+                if isinstance(expected_body, str) and '\\' in expected_body:
+                    try:
+                        expected_body = expected_body.encode('latin1').decode('unicode_escape')
+                    except (UnicodeDecodeError, UnicodeEncodeError):
+                        pass
+                sub_scores.append(("body", _contains_or_sim(email_body, expected_body)))
+
+            if not sub_scores:
+                score = 1.0
+            else:
+                score = sum(s for _, s in sub_scores) / len(sub_scores)
+            if score > best_score:
+                best_score = score
+                failed = [(name, f"{s:.2f}") for name, s in sub_scores if s < 1.0]
+                best_reason = f"email partial: {', '.join(f'{n}={v}' for n, v in failed)}" if failed else "email matches"
+
+        return best_score, best_reason
 
     def _email_matches_criteria(self, email: Any, criteria: dict) -> tuple[bool, str]:
         """Helper to check if a single email object matches given criteria."""
@@ -1419,18 +1580,29 @@ class CampusTask(Task[CampusDatasetItem]):
 
     def _reservation_matches_criteria(self, reservation: Any, criteria: dict) -> bool:
         """Helper to check if a single reservation object matches given criteria."""
-        seat_id_match = ("seat_id" not in criteria or
-                           getattr(reservation, 'seat_id', None) == criteria.get("seat_id"))
-        item_name_match = ("item_name" not in criteria or
-                           ((criteria.get("item_name") or "") in (getattr(reservation, 'item_name', "") or "")))
-        location_id_match = ("location_id" not in criteria or
-                             getattr(reservation, 'location_id', None) == criteria.get("location_id"))
-        time_slot_match = ("time_slot" not in criteria or
-                           getattr(reservation, 'time_slot', None) == criteria.get("time_slot"))
-        date_match = ("date" not in criteria or
-                      getattr(reservation, 'date', None) == criteria.get("date"))
+        return self._score_reservation_match(reservation, criteria)[0] == 1.0
 
-        return seat_id_match and item_name_match and location_id_match and time_slot_match and date_match
+    def _score_reservation_match(self, reservation: Any, criteria: dict) -> tuple[float, str]:
+        """Score a reservation against criteria: correct_fields / total_fields."""
+        checks = []
+        if "seat_id" in criteria:
+            checks.append(("seat_id", getattr(reservation, 'seat_id', None) == criteria["seat_id"]))
+        if "item_name" in criteria:
+            checks.append(("item_name", (criteria["item_name"] or "") in (getattr(reservation, 'item_name', "") or "")))
+        if "location_id" in criteria:
+            checks.append(("location_id", getattr(reservation, 'location_id', None) == criteria["location_id"]))
+        if "time_slot" in criteria:
+            checks.append(("time_slot", getattr(reservation, 'time_slot', None) == criteria["time_slot"]))
+        if "date" in criteria:
+            checks.append(("date", getattr(reservation, 'date', None) == criteria["date"]))
+        if not checks:
+            return 1.0, "no fields to check"
+        n_pass = sum(1 for _, ok in checks if ok)
+        score = n_pass / len(checks)
+        if score == 1.0:
+            return 1.0, "reservation matches"
+        failed = [name for name, ok in checks if not ok]
+        return score, f"reservation mismatch on: {', '.join(failed)}"
 
     def _evaluate_calendar_component(self, calendar_criteria_list: List[dict]) -> tuple[bool, str]:
         """
@@ -1469,49 +1641,47 @@ class CampusTask(Task[CampusDatasetItem]):
 
     def _calendar_event_matches_criteria(self, event: Any, criteria: dict) -> bool:
         """Helper to check if a single calendar event matches given criteria."""
-        matches = True
-        # Check event title contains specified text
-        if "event_title_contains" in criteria:
-            expected_title = criteria["event_title_contains"]
-            try:
-                # Only attempt unescape if the string contains backslashes (potential escape sequences)
-                if isinstance(expected_title, str) and '\\' in expected_title:
-                    expected_title = expected_title.encode('latin1').decode('unicode_escape')
-            except (UnicodeDecodeError, UnicodeEncodeError):
-                # If unescape fails, use the original string
-                pass
-            if expected_title.lower() not in event.event_title.lower():
-                matches = False
-        # Check exact time match
-        if "time" in criteria and event.time != criteria["time"]:
-            matches = False
-        # Check exact location match
+        return self._score_calendar_match(event, criteria)[0] == 1.0
+
+    @staticmethod
+    def _unescape_if_needed(s: str) -> str:
+        """Unescape string if it contains backslash escape sequences."""
+        if not isinstance(s, str) or '\\' not in s:
+            return s
+        try:
+            return s.encode('latin1').decode('unicode_escape')
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            return s
+
+    def _score_calendar_match(self, event: Any, criteria: dict) -> tuple[float, str]:
+        """Score a calendar event against criteria: correct_fields / total_fields."""
+        checks = []
+
+        # Title check (event_title_contains or title_contains)
+        title_key = "event_title_contains" if "event_title_contains" in criteria else "title_contains" if "title_contains" in criteria else None
+        if title_key:
+            expected = self._unescape_if_needed(criteria[title_key])
+            checks.append(("title", expected.lower() in event.event_title.lower()))
+
+        # Time check ("time" or "date" key)
+        if "time" in criteria:
+            checks.append(("time", event.time == criteria["time"]))
+        if "date" in criteria:
+            checks.append(("date", event.time == criteria["date"]))
+
+        # Location check
         if "location" in criteria:
-            expected_location = criteria["location"]
-            try:
-                # Only attempt unescape if the string contains backslashes (potential escape sequences)
-                if isinstance(expected_location, str) and '\\' in expected_location:
-                    expected_location = expected_location.encode('latin1').decode('unicode_escape')
-            except (UnicodeDecodeError, UnicodeEncodeError):
-                # If unescape fails, use the original string
-                pass
-            if event.location != expected_location:
-                matches = False
-        # Legacy support
-        if "title_contains" in criteria:
-            expected_title_legacy = criteria["title_contains"]
-            try:
-                # Only attempt unescape if the string contains backslashes (potential escape sequences)
-                if isinstance(expected_title_legacy, str) and '\\' in expected_title_legacy:
-                    expected_title_legacy = expected_title_legacy.encode('latin1').decode('unicode_escape')
-            except (UnicodeDecodeError, UnicodeEncodeError):
-                # If unescape fails, use the original string
-                pass
-            if expected_title_legacy.lower() not in event.event_title.lower():
-                matches = False
-        if "date" in criteria and event.time != criteria["date"]:
-            matches = False
-        return matches
+            expected_loc = self._unescape_if_needed(criteria["location"])
+            checks.append(("location", event.location == expected_loc))
+
+        if not checks:
+            return 1.0, "no fields to check"
+        n_pass = sum(1 for _, ok in checks if ok)
+        score = n_pass / len(checks)
+        if score == 1.0:
+            return 1.0, "calendar event matches"
+        failed = [name for name, ok in checks if not ok]
+        return score, f"calendar mismatch on: {', '.join(failed)}"
 
     def _evaluate_geography_component(self, geography_criteria_list: List[dict]) -> tuple[bool, str]:
         """
