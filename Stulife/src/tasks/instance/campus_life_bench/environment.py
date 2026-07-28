@@ -791,22 +791,22 @@ class CampusEnvironment:
     def raw_make_booking(self, location_id: str, amenity: str, date: str, time_slot: str, seat_id: Optional[str] = None) -> None:
         """Book a specific amenity or seat in a building.
 
-        Example seat-booking workflow (spread across multiple REPL iterations)::
+        Example seat-booking workflow (across multiple turns)::
 
-            # Iteration 1: Find the library for the subject area mentioned in
+            # Turn 1: Find the library for the subject area mentioned in
             # the task (if the building ID is not already provided), and walk there.
             lib = campus.find_library("engineering")
             bid = lib["id"]
             cur = campus.get_current_location()
             campus.walk_to(campus.find_optimal_path(cur["id"], bid))
 
-            # Iteration 2: Query with time slot and filter on ALL desired features
+            # Turn 2: Query with time slot and filter on ALL desired features
             avail = campus.query_availability(bid, "Week 2, Thursday",
                         "14:30-18:00",
                         features=["natural_lighting", "whiteboard", "good_wifi"])
             print(avail)  # only covering slots with ALL features shown
 
-            # Iteration 3: Book the chosen seat (use slot, amenity, seat_id
+            # Turn 3: Book the chosen seat (use slot, amenity, seat_id
             # from the query result)
             campus.make_booking(bid, "Lecture Hall (101)",
                                 "Week 2, Thursday", "14:30-18:00",
