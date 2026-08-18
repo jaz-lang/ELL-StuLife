@@ -794,11 +794,9 @@ class CampusEnvironment:
         Example seat-booking workflow (across multiple turns)::
 
             # Turn 1: Find the library for the subject area mentioned in
-            # the task (if the building ID is not already provided), and walk there.
+            # the task (if the building ID is not already provided).
             lib = campus.find_library("engineering")
             bid = lib["id"]
-            cur = campus.get_current_location()
-            campus.walk_to(campus.find_optimal_path(cur["id"], bid))
 
             # Turn 2: Query with time slot and filter on ALL desired features
             avail = campus.query_availability(bid, "Week 2, Thursday",
@@ -811,6 +809,10 @@ class CampusEnvironment:
             campus.make_booking(bid, "Lecture Hall (101)",
                                 "Week 2, Thursday", "14:30-18:00",
                                 seat_id="B042-101-S065")
+
+            # Turn 4: Walk to the library.
+            cur = campus.get_current_location()
+            campus.walk_to(campus.find_optimal_path(cur["id"], bid))
 
         Args:
             location_id: Building ID.
