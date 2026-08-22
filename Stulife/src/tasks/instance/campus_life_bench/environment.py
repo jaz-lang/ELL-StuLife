@@ -404,10 +404,10 @@ class CampusEnvironment:
 
         Example — view and then remove an event::
 
-            events = campus.view_schedule("self", "Week 3, Monday")
+            events = view_schedule("self", "Week 3, Monday")
             for e in events:
                 if "Seminar" in e["title"]:
-                    campus.remove_event("self", e["event_id"])
+                    remove_event("self", e["event_id"])
 
         Args:
             calendar_id: Calendar identifier (e.g. "self", or an advisor/club email).
@@ -451,7 +451,7 @@ class CampusEnvironment:
         Example — resolve a list of building names to IDs::
 
             names = ["Elmwood Apartments", "Carson Center", "Fashion Institute", "Campus Transit Hub"]
-            ids = [campus.find_building_id(n)["id"] for n in names]
+            ids = [find_building_id(n)["id"] for n in names]
 
         Use the returned ``"id"`` as ``building_id`` for
         ``find_optimal_path()``, ``query_availability()``,
@@ -553,7 +553,7 @@ class CampusEnvironment:
         Use this to discover which building to book a seat at::
 
             # "I need to study engineering" → find the library
-            lib = campus.find_library("engineering")
+            lib = find_library("engineering")
             # -> {"id": "B042", "name": "STEM Library"}
 
         Args:
@@ -588,12 +588,12 @@ class CampusEnvironment:
 
             ids = ["B104", "B055", "B143", "B071", "B148"]  # start, waypoints, destination
             for i in range(len(ids) - 1):
-                path = campus.find_optimal_path(ids[i], ids[i + 1])
-                campus.walk_to(path)
+                path = find_optimal_path(ids[i], ids[i + 1])
+                walk_to(path)
 
         Example with constraints::
 
-            path = campus.find_optimal_path("B010", "B127",
+            path = find_optimal_path("B010", "B127",
                 constraints={"path_type": "Indoor", "rain_exposure": "Covered"})
 
         Args:
@@ -657,8 +657,8 @@ class CampusEnvironment:
 
             ids = ["B104", "B055", "B143", "B071", "B148"]  # start, waypoints, destination
             for i in range(len(ids) - 1):
-                path = campus.find_optimal_path(ids[i], ids[i + 1])
-                campus.walk_to(path)
+                path = find_optimal_path(ids[i], ids[i + 1])
+                walk_to(path)
 
         Args:
             path_info: Dict with a "path" key containing an ordered list of building IDs
@@ -674,10 +674,10 @@ class CampusEnvironment:
 
         Example — walk from current location to a destination::
 
-            cur = campus.get_current_location()
-            dest = campus.find_building_id("STEM Library")
-            path = campus.find_optimal_path(cur["id"], dest["id"])
-            campus.walk_to(path)
+            cur = get_current_location()
+            dest = find_building_id("STEM Library")
+            path = find_optimal_path(cur["id"], dest["id"])
+            walk_to(path)
 
         Returns:
             Dict with "name" and "id" keys.
@@ -698,7 +698,7 @@ class CampusEnvironment:
 
         Example::
 
-            avail = campus.query_availability(
+            avail = query_availability(
                 "B042", "Week 2, Thursday", "15:45-19:15",
                 features=["natural_lighting", "whiteboard", "good_wifi", "quiet_zone"])
             # Returns only slots covering 15:45–19:15, tightest fit first.
@@ -795,24 +795,24 @@ class CampusEnvironment:
 
             # Turn 1: Find the library for the subject area mentioned in
             # the task (if the building ID is not already provided).
-            lib = campus.find_library("engineering")
+            lib = find_library("engineering")
             bid = lib["id"]
 
             # Turn 2: Query with time slot and filter on ALL desired features
-            avail = campus.query_availability(bid, "Week 2, Thursday",
+            avail = query_availability(bid, "Week 2, Thursday",
                         "14:30-18:00",
                         features=["natural_lighting", "whiteboard", "good_wifi"])
             print(avail)  # only covering slots with ALL features shown
 
             # Turn 3: Book the chosen seat (use slot, amenity, seat_id
             # from the query result)
-            campus.make_booking(bid, "Lecture Hall (101)",
+            make_booking(bid, "Lecture Hall (101)",
                                 "Week 2, Thursday", "14:30-18:00",
                                 seat_id="B042-101-S065")
 
             # Turn 4: Walk to the library.
-            cur = campus.get_current_location()
-            campus.walk_to(campus.find_optimal_path(cur["id"], bid))
+            cur = get_current_location()
+            walk_to(find_optimal_path(cur["id"], bid))
 
         Args:
             location_id: Building ID.
@@ -895,17 +895,17 @@ class CampusEnvironment:
 
         Example — find a club by category::
 
-            clubs = campus.list_by_category("Sports & Fitness", "club")
+            clubs = list_by_category("Sports & Fitness", "club")
             for c in clubs:
                 if "Rock Climbing" in c["club_name"]:
                     print(c["club_id"], c["recruitment_info"])
 
         Example — find an advisor and send email::
 
-            advisors = campus.list_by_category("Engineering", "advisor", level="level_2")
+            advisors = list_by_category("Engineering", "advisor", level="level_2")
             for a in advisors:
                 if "Raymond" in a["name"]:
-                    campus.send_email(a["email"], "Subject", "Body")
+                    send_email(a["email"], "Subject", "Body")
 
         Args:
             category: Category to filter by.
@@ -936,8 +936,8 @@ class CampusEnvironment:
 
         Example — find an advisor's email to send a message::
 
-            adv = campus.query_by_identifier("Raymond Clark", "name", "advisor")
-            campus.send_email(adv["email"], "Consultation Request", "...")
+            adv = query_by_identifier("Raymond Clark", "name", "advisor")
+            send_email(adv["email"], "Consultation Request", "...")
 
         Args:
             identifier: Name or ID of the club/advisor (e.g. "Rock Climbing
@@ -990,10 +990,10 @@ class CampusEnvironment:
         Example — map course names to draft section_ids::
 
             names = ["Linear Algebra", "Mental Health", "Military Theory"]
-            draft_ids = {d["section_id"] for d in campus.view_draft()}
+            draft_ids = {d["section_id"] for d in view_draft()}
             name_to_id = {}
             for name in names:
-                for c in campus.browse_courses({"course_name": name}):
+                for c in browse_courses({"course_name": name}):
                     if c["section_id"] in draft_ids:
                         name_to_id[name] = c["section_id"]
             print(name_to_id)
@@ -1061,7 +1061,7 @@ class CampusEnvironment:
             name_to_pass = {"Mental Health": "S-Pass", "Linear Algebra": "A-Pass", ...}
             name_to_id = { ... }  # built via browse_courses + view_draft
             for name, pass_type in name_to_pass.items():
-                campus.assign_pass(name_to_id[name], pass_type)
+                assign_pass(name_to_id[name], pass_type)
 
         Use the exact ``section_id`` from ``view_draft()``, not from
         ``browse_courses()`` — a course may have multiple sections.
