@@ -262,6 +262,15 @@ class InformationSystem:
         if entity_type not in ["club", "advisor"]:
             raise ValueError("Entity type must be either 'club' or 'advisor'.")
 
+        # Fail fast on a bad `level` (otherwise it falls through every branch to an empty list, which
+        # reads as "no matches" rather than "invalid argument"). `level` applies to advisors only.
+        if level not in (None, "level_1", "level_2"):
+            raise ValueError(
+                f"Invalid level {level!r}. Must be one of: None, 'level_1', 'level_2'."
+            )
+        if level is not None and entity_type == "club":
+            raise ValueError("level applies only to entity_type='advisor'; omit it for clubs.")
+
         results: List[Dict[str, Any]] = []
 
         if entity_type == "club":

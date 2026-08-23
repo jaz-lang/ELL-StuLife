@@ -434,18 +434,25 @@ class ReservationSystem:
         for floor_rooms in internal_amenities.values():
             if isinstance(floor_rooms, list):
                 all_room_names.extend(floor_rooms)
-        if all_room_names:
-            match = any(
-                room_name == item_name or room_name.startswith(item_name + " (")
-                for room_name in all_room_names
+        # Amenity-existence check is unconditional: when a building lists no amenities at all, booking a
+        # bogus one used to fall through and silently create a reservation, so raise instead.
+        if not all_room_names:
+            building_name = building_data.get("name", building_id)
+            raise ValueError(
+                f"{building_name} ({building_id}) has no bookable amenities. "
+                f"Use query_availability({building_id!r}, <date>) to find bookable amenities."
             )
-            if not match:
-                building_name = building_data.get("name", building_id)
-                raise ValueError(
-                    f"'{item_name}' is not a bookable amenity at {building_name} ({building_id}). "
-                    f"Available amenities: {all_room_names}. "
-                    f"Use query_availability({building_id!r}, <date>) to see what's available."
-                )
+        match = any(
+            room_name == item_name or room_name.startswith(item_name + " (")
+            for room_name in all_room_names
+        )
+        if not match:
+            building_name = building_data.get("name", building_id)
+            raise ValueError(
+                f"'{item_name}' is not a bookable amenity at {building_name} ({building_id}). "
+                f"Available amenities: {all_room_names}. "
+                f"Use query_availability({building_id!r}, <date>) to see what's available."
+            )
 
         # Validate seat_id against amenity seat data
         detailed_building = next(

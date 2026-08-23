@@ -147,6 +147,16 @@ class CourseSelectionSystem:
         Raises:
             ValueError: If no courses match the criteria
         """
+        # Fail fast on unknown filter keys: only these three are honored, so a typo'd key would
+        # otherwise be silently ignored and return an unintended (unfiltered-on-that-key) result.
+        if filters:
+            allowed = {"credits", "course_code", "course_name"}
+            unknown = set(filters) - allowed
+            if unknown:
+                raise ValueError(
+                    f"Unknown filter key(s) {sorted(unknown)}. Valid filters: {sorted(allowed)}."
+                )
+
         courses = []
 
         for course in self._courses_data.get("courses", []):

@@ -5,6 +5,7 @@ All natural language communications/returns MUST use English only
 
 import os
 import json
+import re
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 
@@ -13,6 +14,17 @@ from .systems import (
     WorldTimeSystem, CalendarSystem, MapLookupSystem, GeographySystem,
     ReservationSystem, InformationSystem, CourseSelectionSystem, EmailSystem
 )
+
+# Valid seat feature names for query_availability(features=...). Kept in sync with the
+# raw_query_availability docstring's "Valid feature names" list; used to fail fast on a
+# misspelled/unknown feature instead of silently returning nothing.
+_VALID_SEAT_FEATURES = frozenset({
+    "comfortable_seating", "computer_access", "convenient_location", "discussion_zone",
+    "good_wifi", "group_room", "historical_archives", "large_table", "low_traffic_area",
+    "natural_lighting", "power_outlet", "private_space", "projector", "quiet_zone",
+    "reference_materials", "sofa_area", "specialized_collections", "technical_resources",
+    "whiteboard", "window_seat",
+})
 
 
 class CampusEnvironment:
@@ -731,6 +743,24 @@ class CampusEnvironment:
             Dict mapping time slots to floors to amenity dicts, ordered from
             shortest to longest slot.
         """
+        # Fail fast on a malformed time_slot (otherwise it errors opaquely deep in the time filter) and
+        # on a non-list / unknown-feature `features` (a bare string silently matches nothing).
+        if not re.match(r'^\d{2}:\d{2}-\d{2}:\d{2}$', time_slot or ""):
+            raise ValueError(
+                f"Invalid time_slot format '{time_slot}'. "
+                f"Expected format: 'HH:MM-HH:MM' (e.g. '15:45-19:15')."
+            )
+        if not isinstance(features, list):
+            raise ValueError(
+                f"features must be a list of feature-name strings (got {type(features).__name__}). "
+                f"Pass [] for no feature filtering."
+            )
+        unknown = [f for f in features if f not in _VALID_SEAT_FEATURES]
+        if unknown:
+            raise ValueError(
+                f"Unknown feature name(s) {unknown}. "
+                f"Valid features: {sorted(_VALID_SEAT_FEATURES)}."
+            )
         result = self.reservation_system.query_availability(building_id, date)
         result = self._filter_availability_by_time(result, time_slot)
         if features:

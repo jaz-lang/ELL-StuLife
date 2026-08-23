@@ -229,6 +229,24 @@ class MapLookupSystem:
         if constraints is None:
             constraints = {}
 
+        # Validate constraint keys/values against the edge properties actually present in the map, so a
+        # typo (silently ignored by the cost function, which just penalizes every edge uniformly) fails
+        # fast instead of returning an unconstrained path the caller believes was constrained.
+        if constraints:
+            valid: Dict[str, set] = {}
+            for edge in self._map_data.get("edges", []):
+                for k, v in (edge.get("properties") or {}).items():
+                    valid.setdefault(k, set()).add(v)
+            for k, v in constraints.items():
+                if k not in valid:
+                    raise ValueError(
+                        f"Unknown constraint key '{k}'. Valid keys: {sorted(valid)}."
+                    )
+                if v not in valid[k]:
+                    raise ValueError(
+                        f"Invalid value '{v}' for constraint '{k}'. Valid values: {sorted(valid[k])}."
+                    )
+
         result = self._find_optimal_path_algorithm(self._map_data, source_building_id, target_building_id, constraints)
 
         if "error" in result:
