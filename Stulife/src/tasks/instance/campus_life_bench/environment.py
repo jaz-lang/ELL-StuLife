@@ -579,12 +579,15 @@ class CampusEnvironment:
             ValueError: If the subject doesn't match any known library.
         """
         key = subject.strip().lower()
-        # Try exact match first, then substring
+        # Exact match, then forward substring only: the subject must CONTAIN a known discipline word
+        # (e.g. "structural engineering" -> "engineering"). The reverse direction (`key in k`) was dropped
+        # -- it let a short fragment silently resolve to an arbitrary library (e.g. "art" matches
+        # "cartography"), and no real subject relies on it; an unresolvable subject raises below instead.
         if key in self._SUBJECT_TO_LIBRARY:
             bid, name = self._SUBJECT_TO_LIBRARY[key]
             return {"id": bid, "name": name}
         for k, (bid, name) in self._SUBJECT_TO_LIBRARY.items():
-            if k in key or key in k:
+            if k in key:
                 return {"id": bid, "name": name}
         raise ValueError(
             f"No library found for subject {subject!r}. "
