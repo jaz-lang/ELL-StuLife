@@ -520,12 +520,12 @@ class CampusEnvironment:
         "quantum": ("B042", "STEM Library"),
         "topology": ("B042", "STEM Library"),
         "real analysis": ("B042", "STEM Library"),
-        "cryptography": ("B042", "STEM Library"),
+        "cryptograph": ("B042", "STEM Library"),  # stem: matches "cryptography" and "cryptographic ..."
         "signal processing": ("B042", "STEM Library"),
         "fluid dynamics": ("B042", "STEM Library"),
         "digital circuits": ("B042", "STEM Library"),
         # Grand Central Library (B001) — humanities, social sciences, general
-        "anthropology": ("B001", "Grand Central Library"),  # GT-confirmed (libstudy tasks 052, 066)
+        "anthropology": ("B001", "Grand Central Library"),  # GT-confirmed (libstudy task 052)
         "psychology": ("B001", "Grand Central Library"),
         "sociology": ("B001", "Grand Central Library"),
         "economics": ("B001", "Grand Central Library"),
