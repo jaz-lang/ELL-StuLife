@@ -67,7 +67,6 @@ class ReservationSystem:
         if item_name and building_id:
             key = (building_id, item_name)
             self._configured_availability[key] = available_times
-            print(f"Set pre-configured availability for {item_name} in {building_id}: {available_times}")
 
     def set_task_context(self, task_data: Dict[str, Any]) -> None:
         """
@@ -200,7 +199,6 @@ class ReservationSystem:
         detailed_building_data = next((lib for lib in self._campus_data.get("library_seats", {}).get("libraries", []) if lib.get("id") == location_id), None)
 
         if not detailed_building_data:
-            print(f"DEBUG: No library data found for building_id '{location_id}'")
             return self._generate_fallback_availability(target_time_slot, target_item_name)
 
         # Find the specific room in the detailed data
@@ -217,7 +215,6 @@ class ReservationSystem:
             all_real_seats_in_room.extend(target_room_data.get("seats", []))
 
         if not all_real_seats_in_room:
-            print(f"DEBUG: No real seats found for {target_item_name} in {location_id}")
             return self._generate_fallback_availability(target_time_slot, target_item_name)
 
         # 3. Separate seats into correct and distractor piles
